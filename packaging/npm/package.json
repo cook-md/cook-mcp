@@ -1,0 +1,10 @@
+{
+  "name": "@cookmd/nutrition-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for cook.md nutrition evaluation and cooklang report rendering",
+  "bin": { "nutrition-mcp": "bin/nutrition-mcp.js" },
+  "scripts": { "postinstall": "node install.js" },
+  "files": ["bin/", "install.js", "checksums.json"],
+  "license": "SEE LICENSE AT https://cook.md",
+  "engines": { "node": ">=18" }
+}
