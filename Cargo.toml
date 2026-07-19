@@ -17,8 +17,8 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 dirs.workspace = true
 base64.workspace = true
-nutrition-client = { path = "../nutrition-client" }
-nutrition-jinja = { path = "../nutrition-jinja" }
+cookmd-nutrition-client = "0.1"
+cooklang-reports-nutrition = "0.1"
 cooklang-reports.workspace = true
 
 [dev-dependencies]

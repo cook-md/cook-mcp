@@ -360,10 +360,10 @@ impl NutritionMcp {
             // "failed to read template ...") in the tool error.
             Err(e) => {
                 let mut msg = format!("{e:#}");
-                // No downcast is possible here: nutrition-jinja stringifies
+                // No downcast is possible here: cooklang-reports-nutrition stringifies
                 // ClientError at the minijinja boundary (`e.to_string()`), so
                 // match the exact Display prefix of
-                // `nutrition_client::ClientError::Unauthorized` instead.
+                // `cookmd_nutrition_client::ClientError::Unauthorized` instead.
                 if msg.contains("authentication required") {
                     msg.push_str(
                         "\nHint: not authenticated — run the `login` tool \
@@ -572,7 +572,7 @@ mod tests {
             .collect()
     }
 
-    /// Full aggregate-response shape nutrition-client deserializes (mirrors
+    /// Full aggregate-response shape cookmd-nutrition-client deserializes (mirrors
     /// the known-good fixture in render.rs tests).
     fn agg_response(kcal: f64) -> serde_json::Value {
         serde_json::json!({

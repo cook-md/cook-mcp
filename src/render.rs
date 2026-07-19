@@ -1,8 +1,8 @@
 //! Embedded jinja render core: wires cooklang-reports + NutritionExtension
-//! exactly like `cook-nutrition-demo`, but returns the rendered text plus
+//! exactly like the `cook-nutrition-demo` example in cooklang-reports-nutrition, but returns the rendered text plus
 //! check results and resolve failures instead of printing/exiting.
 //!
-//! Everything here is blocking (nutrition-client is a blocking HTTP client);
+//! Everything here is blocking (cookmd-nutrition-client is a blocking HTTP client);
 //! the MCP tool layer runs `render()` inside `spawn_blocking`.
 
 use std::path::{Path, PathBuf};
@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, anyhow, bail};
 use cooklang_reports::{Config as ReportConfig, render_template_with_config};
-use nutrition_client::Client;
-use nutrition_jinja::NutritionExtension;
+use cooklang_reports_nutrition::NutritionExtension;
+use cookmd_nutrition_client::Client;
 
 /// Template or input content: given inline or read from a file.
 #[derive(Debug, Clone)]
@@ -177,9 +177,12 @@ pub fn render(
     }
 
     if kind == InputKind::Menu {
-        let plan =
-            nutrition_jinja::plan::build_plan_from_source(&input_text, &base_path, input_path)
-                .map_err(|e| anyhow!("plan error: {e}"))?;
+        let plan = cooklang_reports_nutrition::plan::build_plan_from_source(
+            &input_text,
+            &base_path,
+            input_path,
+        )
+        .map_err(|e| anyhow!("plan error: {e}"))?;
         config = config.with_context("plan", serde_json::to_value(&plan)?);
     }
 
@@ -217,8 +220,8 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    /// Full aggregate-response shape nutrition-client deserializes (mirrors
-    /// the known-good fixture in nutrition-jinja/tests/jinja_test.rs — all
+    /// Full aggregate-response shape cookmd-nutrition-client deserializes (mirrors
+    /// the known-good fixture in cooklang-reports-nutrition's jinja_test.rs — all
     /// MacroTotals fields and confidence_breakdown are required).
     fn agg_response(kcal: f64, failures: serde_json::Value) -> serde_json::Value {
         serde_json::json!({
