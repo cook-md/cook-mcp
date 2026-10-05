@@ -47,7 +47,11 @@ fn walk(dir: &Utf8Path, out: &mut Vec<camino::Utf8PathBuf>) -> std::io::Result<(
         if name.starts_with('.') {
             continue;
         }
-        if entry.file_type()?.is_dir() {
+        let ft = entry.file_type()?;
+        if ft.is_symlink() {
+            continue;
+        }
+        if ft.is_dir() {
             walk(&path, out)?;
         } else if matches!(path.extension(), Some("cook" | "menu")) {
             out.push(path);
@@ -56,12 +60,24 @@ fn walk(dir: &Utf8Path, out: &mut Vec<camino::Utf8PathBuf>) -> std::io::Result<(
     Ok(())
 }
 
-fn tags_of(ws: &crate::workspace::Workspace, path: &Utf8Path) -> Vec<String> {
+/// True when `full` is under the recipe root with no symlink on the way
+/// (so it cannot loop or leave the collection).
+fn is_plain(ws: &crate::workspace::Workspace, full: &Utf8Path) -> bool {
+    std::fs::canonicalize(full)
+        .map(|c| c == full.as_std_path() && c.starts_with(ws.root().as_std_path()))
+        .unwrap_or(false)
+}
+
+/// A scale factor must be a positive, finite number.
+fn valid_scale(s: f64) -> bool {
+    s.is_finite() && s > 0.0
+}
+
+fn tags_of(path: &Utf8Path) -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return vec![];
     };
     let name = path.file_stem().unwrap_or("recipe");
-    let _ = ws;
     match cookcli_core::parse_recipe(&text, name, 1.0) {
         Ok(o) => o
             .value
@@ -131,6 +147,11 @@ impl CookMcp {
             return Ok(text_err(format!("cannot list {dir}: {e}")));
         }
         let want = a.kind.as_deref().unwrap_or("all");
+        if !matches!(want, "all" | "recipe" | "menu") {
+            return Ok(text_err(format!(
+                "unknown kind {want:?}: use \"recipe\", \"menu\" or \"all\""
+            )));
+        }
         let mut recipes: Vec<serde_json::Value> = files
             .iter()
             .filter(|p| match want {
@@ -160,13 +181,23 @@ impl CookMcp {
         Parameters(a): Parameters<ReadArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let ws = &self.workspace;
+        let scale = a.scale.unwrap_or(1.0);
+        if !valid_scale(scale) {
+            return Ok(text_err("scale must be a positive number"));
+        }
         let rel_path = match ws.relative(&a.path) {
             Ok(p) => p,
             Err(e) => return Ok(workspace_err(e)),
         };
+        if !matches!(rel_path.extension(), None | Some("cook" | "menu")) {
+            return Ok(text_err("read_recipe reads .cook recipes and .menu plans"));
+        }
+        if let Err(e) = ws.resolve(&a.path) {
+            return Ok(workspace_err(e));
+        }
         let req = recipe::ReadRequest {
             source: RecipeSource::Path(rel_path),
-            scale: a.scale.unwrap_or(1.0),
+            scale,
         };
         match recipe::read(&ws.context(), req) {
             Err(e) => Ok(core_err(e)),
@@ -221,9 +252,10 @@ impl CookMcp {
         };
         let mut hits: Vec<serde_json::Value> = candidates
             .into_iter()
+            .filter(|(p, _)| is_plain(ws, &ws.root().join(p)))
             .filter(|(p, _)| {
                 tag.as_ref()
-                    .is_none_or(|t| tags_of(ws, &ws.root().join(p)).contains(t))
+                    .is_none_or(|t| tags_of(&ws.root().join(p)).contains(t))
             })
             .map(|(p, name)| serde_json::json!({ "path": p, "name": name }))
             .collect();
@@ -289,6 +321,9 @@ impl CookMcp {
         let base_dir = match a.path.as_deref() {
             None | Some("") | Some(".") => None,
             Some(d) => match ws.resolve(d) {
+                Ok(p) if p.is_file() => {
+                    return Ok(text_err("not a .cook/.menu file or folder"));
+                }
                 Ok(p) => Some(p),
                 Err(e) => return Ok(workspace_err(e)),
             },
@@ -304,9 +339,28 @@ impl CookMcp {
             Ok(o) => o.value,
             Err(e) => return Ok(core_err(e)),
         };
-        let broken = doctor::broken_references(&report);
-        let problems: Vec<serde_json::Value> = report
+        // Drop anything reached through a symlink (loops, outside targets).
+        let scanned_from = if report.base_dir.is_absolute() {
+            report.base_dir.clone()
+        } else {
+            ws.root().join(&report.base_dir)
+        };
+        let plain: Vec<&_> = report
             .recipes
+            .iter()
+            .filter(|r| is_plain(ws, &scanned_from.join(&r.path)))
+            .collect();
+        let total = plain.len();
+        let with_errors = plain
+            .iter()
+            .filter(|r| {
+                r.diagnostics
+                    .iter()
+                    .any(|d| d.severity == cookcli_core::Severity::Error)
+            })
+            .count();
+        let broken = doctor::broken_references(&report);
+        let problems: Vec<serde_json::Value> = plain
             .iter()
             .filter(|r| !r.diagnostics.is_empty() || broken.contains_key(r.path.as_path()))
             .map(|r| {
@@ -330,9 +384,9 @@ impl CookMcp {
                 serde_json::json!({ "configured": !ctx.aisle().is_unset(), "unknown": unknown })
             });
         Ok(json_ok(&serde_json::json!({
-            "total_recipes": report.total_recipes(),
-            "recipes_with_errors": report.recipes_with_errors(),
-            "recipes_with_broken_references": broken.len(),
+            "total_recipes": total,
+            "recipes_with_errors": with_errors,
+            "recipes_with_broken_references": plain.iter().filter(|r| broken.contains_key(r.path.as_path())).count(),
             "problems": problems,
             "aisle": aisle,
         })))
@@ -400,10 +454,23 @@ impl CookMcp {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         use cookcli_core::shopping_list::{self, GenerateRequest, ScaledRecipe};
         let ws = &self.workspace;
+        if a.recipes.is_empty() {
+            return Ok(text_err(
+                "`recipes` is empty: list at least one recipe or .menu",
+            ));
+        }
         let mut recipes = Vec::new();
         for entry in &a.recipes {
             let (name, scale) =
                 recipe::split_name_and_scale(entry).unwrap_or((entry.as_str(), 1.0));
+            if !valid_scale(scale) {
+                return Ok(text_err(format!(
+                    "scale in {entry:?} must be a positive number"
+                )));
+            }
+            if let Err(e) = ws.resolve(name) {
+                return Ok(workspace_err(e));
+            }
             match ws.relative(name) {
                 Ok(p) => recipes.push(ScaledRecipe::scaled(RecipeSource::Path(p), scale)),
                 Err(e) => return Ok(workspace_err(e)),
@@ -665,5 +732,177 @@ pub(crate) mod tests {
             !text.contains("\"flour\""),
             "flour is in the pantry: {text}"
         );
+    }
+
+    #[cfg(unix)]
+    mod symlinks {
+        use super::*;
+        use std::os::unix::fs::symlink;
+
+        fn outside() -> tempfile::TempDir {
+            let o = tempfile::tempdir().unwrap();
+            std::fs::write(o.path().join("Secret.cook"), "Eat @secret{1}.\n").unwrap();
+            o
+        }
+
+        #[tokio::test]
+        async fn read_recipe_refuses_symlinks_out_of_root() {
+            let (d, ws) = fixture_workspace();
+            let o = outside();
+            symlink(o.path().join("Secret.cook"), d.path().join("Link.cook")).unwrap();
+            symlink(o.path(), d.path().join("Escape")).unwrap();
+            let s = server(ws);
+            for p in ["Link.cook", "Escape/Secret.cook"] {
+                let r = s
+                    .read_recipe(Parameters(ReadArgs {
+                        path: p.into(),
+                        scale: None,
+                    }))
+                    .await
+                    .unwrap();
+                assert_eq!(r.is_error, Some(true), "{p}: {}", text_of(&r));
+                assert!(!text_of(&r).contains("secret"), "{p}");
+            }
+        }
+
+        #[tokio::test]
+        async fn shopping_list_refuses_symlinks_out_of_root() {
+            let (d, ws) = fixture_workspace();
+            let o = outside();
+            symlink(o.path(), d.path().join("Escape")).unwrap();
+            let s = server(ws);
+            let r = s
+                .shopping_list(Parameters(ShoppingArgs {
+                    recipes: vec!["Escape/Secret.cook".into()],
+                    ignore_pantry: None,
+                    format: None,
+                }))
+                .await
+                .unwrap();
+            assert_eq!(r.is_error, Some(true), "{}", text_of(&r));
+        }
+
+        #[tokio::test]
+        async fn list_skips_symlinks() {
+            let (d, ws) = fixture_workspace();
+            let o = outside();
+            symlink(o.path().join("Secret.cook"), d.path().join("Link.cook")).unwrap();
+            symlink(o.path(), d.path().join("Escape")).unwrap();
+            symlink(d.path(), d.path().join("Dinner/Loop")).unwrap();
+            let s = server(ws);
+            let v = json(
+                &s.list_recipes(Parameters(ListArgs {
+                    dir: None,
+                    kind: None,
+                }))
+                .await
+                .unwrap(),
+            );
+            let n = v["recipes"].as_array().unwrap().len();
+            assert_eq!(n, 4, "{v}");
+        }
+
+        #[tokio::test]
+        async fn search_ignores_loops_and_escapes() {
+            let (d, ws) = fixture_workspace();
+            let o = outside();
+            symlink(o.path(), d.path().join("Escape")).unwrap();
+            symlink(d.path(), d.path().join("Dinner/Loop")).unwrap();
+            let s = server(ws);
+            for q in ["secret", "garlic", "pasta"] {
+                let v = json(
+                    &s.search_recipes(Parameters(SearchArgs {
+                        query: q.into(),
+                        tag: None,
+                    }))
+                    .await
+                    .unwrap(),
+                );
+                for h in v["hits"].as_array().unwrap() {
+                    let p = h["path"].as_str().unwrap();
+                    assert!(!p.contains("Loop/") && !p.starts_with("Escape"), "{q}: {v}");
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn validate_ignores_loops_and_escapes() {
+            let (d, ws) = fixture_workspace();
+            let o = outside();
+            symlink(o.path(), d.path().join("Escape")).unwrap();
+            symlink(d.path(), d.path().join("Dinner/Loop")).unwrap();
+            let s = server(ws);
+            let v = json(
+                &s.validate(Parameters(ValidateArgs {
+                    path: None,
+                    content: None,
+                    as_path: None,
+                }))
+                .await
+                .unwrap(),
+            );
+            assert_eq!(v["total_recipes"], 4, "{v}");
+            assert!(!v.to_string().contains("Loop/"), "{v}");
+            assert!(!v.to_string().contains("Escape"), "{v}");
+        }
+    }
+
+    #[tokio::test]
+    async fn input_checks() {
+        let (_d, ws) = fixture_workspace();
+        let s = server(ws);
+        for scale in [0.0, -1.0, f64::NAN] {
+            let r = s
+                .read_recipe(Parameters(ReadArgs {
+                    path: "Breakfast/Pancakes.cook".into(),
+                    scale: Some(scale),
+                }))
+                .await
+                .unwrap();
+            assert_eq!(r.is_error, Some(true));
+        }
+        let r = s
+            .read_recipe(Parameters(ReadArgs {
+                path: "config/aisle.conf".into(),
+                scale: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let r = s
+            .validate(Parameters(ValidateArgs {
+                path: Some("config/aisle.conf".into()),
+                content: None,
+                as_path: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let r = s
+            .shopping_list(Parameters(ShoppingArgs {
+                recipes: vec![],
+                ignore_pantry: None,
+                format: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let r = s
+            .shopping_list(Parameters(ShoppingArgs {
+                recipes: vec!["Breakfast/Pancakes.cook:0".into()],
+                ignore_pantry: None,
+                format: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let r = s
+            .list_recipes(Parameters(ListArgs {
+                dir: None,
+                kind: Some("bogus".into()),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
     }
 }
