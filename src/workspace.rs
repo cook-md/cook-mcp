@@ -25,9 +25,13 @@ pub enum WorkspaceError {
     #[error("path `{path}` resolves outside the recipe root {root}")]
     Escapes { path: String, root: String },
     #[error(
-        "cannot write `{0}`: only .cook and .menu files, config/aisle.conf and config/pantry.conf can be written"
+        "cannot write `{0}`: only .cook and .menu files, config/aisle.conf, config/pantry.conf and reports/**/*.jinja templates can be written"
     )]
     Extension(String),
+    #[error(
+        "write_config writes config/aisle.conf, config/pantry.conf or a report template under reports/ (*.jinja); `{0}` is none of those (use write_recipe / write_menu for Cooklang)"
+    )]
+    NotConfig(String),
     #[error(
         "content uses the deprecated `>>` metadata syntax; put metadata in YAML frontmatter between `---` lines instead"
     )]
@@ -136,15 +140,32 @@ pub struct WriteReport {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Cooklang,
-    Config,
+    Aisle,
+    Pantry,
+    /// A jinja report template under `reports/`; free text, not validated.
+    Template,
 }
 
 fn writable_kind(rel: &Utf8Path) -> Option<Kind> {
     match rel.extension() {
         Some("cook" | "menu") => Some(Kind::Cooklang),
-        _ if rel == "config/aisle.conf" || rel == "config/pantry.conf" => Some(Kind::Config),
+        Some("jinja") if rel.starts_with("reports") => Some(Kind::Template),
+        _ if rel == "config/aisle.conf" => Some(Kind::Aisle),
+        _ if rel == "config/pantry.conf" => Some(Kind::Pantry),
         _ => None,
     }
+}
+
+/// Lenient-parse problems in an aisle/pantry config, all as warnings: the
+/// apps parse these files leniently too, so a bad line is skipped, not fatal.
+fn config_warnings(
+    report: &cookcli_core::cooklang::error::SourceReport,
+    rel: &Utf8Path,
+) -> Vec<Diagnostic> {
+    report
+        .iter()
+        .map(|d| Diagnostic::warning(d.message.to_string()).at_file(rel))
+        .collect()
 }
 
 /// `>>` metadata lines (pre-frontmatter Cooklang). The parser still accepts
@@ -192,6 +213,16 @@ impl Workspace {
         }
     }
 
+    /// Write an aisle/pantry config or a report template (never Cooklang).
+    /// Config problems come back as warnings; nothing here blocks the write.
+    pub fn write_config(&self, path: &str, content: &str) -> Result<WriteReport, WorkspaceError> {
+        let rel = self.relative(path)?;
+        match writable_kind(&rel) {
+            Some(Kind::Aisle | Kind::Pantry | Kind::Template) => self.write(path, content, false),
+            _ => Err(WorkspaceError::NotConfig(path.into())),
+        }
+    }
+
     /// Validate, then atomically write `content` to `path`.
     pub fn write(
         &self,
@@ -203,7 +234,15 @@ impl Workspace {
         let kind = writable_kind(&rel).ok_or_else(|| WorkspaceError::Extension(path.into()))?;
         let full = self.resolve(path)?;
         let diagnostics = match kind {
-            Kind::Config => Vec::new(),
+            Kind::Template => Vec::new(),
+            Kind::Aisle => config_warnings(
+                cookcli_core::cooklang::aisle::parse_lenient(content).report(),
+                &rel,
+            ),
+            Kind::Pantry => config_warnings(
+                cookcli_core::cooklang::pantry::parse_lenient(content).report(),
+                &rel,
+            ),
             Kind::Cooklang => {
                 if has_legacy_metadata(content) {
                     return Err(WorkspaceError::LegacyMetadata);
@@ -392,6 +431,53 @@ mod tests {
             ws.write("config/aisle.conf", "[produce]\nleek\n", false)
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn templates_under_reports_are_writable_without_cooklang_checks() {
+        let (_d, ws) = fixture_workspace();
+        let r = ws
+            .write_config("reports/nutrition/week.md.jinja", "{{ >> not cooklang }}")
+            .unwrap();
+        assert_eq!(r.status, "created");
+        assert!(ws.root().join("reports/nutrition/week.md.jinja").exists());
+        for bad in [
+            "reports/x.txt",
+            "other/x.jinja",
+            "x.jinja",
+            "Dinner/Pasta.cook",
+        ] {
+            assert!(
+                matches!(ws.write_config(bad, "x"), Err(WorkspaceError::NotConfig(_))),
+                "{bad} should be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn config_files_can_be_created_and_report_lenient_warnings() {
+        let (_d, ws) = fixture_workspace();
+        std::fs::remove_file(ws.root().join("config/pantry.conf")).unwrap();
+        let r = ws
+            .write_config("config/pantry.conf", "[fridge]\nmilk = \"1%l\"\n")
+            .unwrap();
+        assert_eq!(r.status, "created");
+        assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
+        // Broken TOML is still saved, with warnings, never refused.
+        let r = ws
+            .write_config("config/pantry.conf", "[fridge\nmilk = \n")
+            .unwrap();
+        assert!(!r.diagnostics.is_empty());
+        assert!(
+            r.diagnostics
+                .iter()
+                .all(|d| d.severity == Severity::Warning)
+        );
+        let r = ws
+            .write_config("config/aisle.conf", "[produce]\nleek\n")
+            .unwrap();
+        assert_eq!(r.status, "overwritten");
+        assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
     }
 
     #[test]

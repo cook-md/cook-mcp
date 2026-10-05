@@ -11,7 +11,8 @@ use crate::server::CookMcp;
 pub struct ListArgs {
     /// Folder to list, relative to the recipe root. Default: the whole collection.
     pub dir: Option<String>,
-    /// "recipe" (.cook), "menu" (.menu) or "all" (default).
+    /// "recipe" (.cook), "menu" (.menu), "all" (default: both), or "template" for the
+    /// .jinja report templates under reports/.
     pub kind: Option<String>,
 }
 
@@ -38,6 +39,14 @@ fn rel(ws: &crate::workspace::Workspace, p: &Utf8Path) -> String {
 }
 
 fn walk(dir: &Utf8Path, out: &mut Vec<camino::Utf8PathBuf>) -> std::io::Result<()> {
+    walk_ext(dir, &["cook", "menu"], out)
+}
+
+fn walk_ext(
+    dir: &Utf8Path,
+    exts: &[&str],
+    out: &mut Vec<camino::Utf8PathBuf>,
+) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let Ok(path) = camino::Utf8PathBuf::from_path_buf(entry.path()) else {
@@ -52,8 +61,8 @@ fn walk(dir: &Utf8Path, out: &mut Vec<camino::Utf8PathBuf>) -> std::io::Result<(
             continue;
         }
         if ft.is_dir() {
-            walk(&path, out)?;
-        } else if matches!(path.extension(), Some("cook" | "menu")) {
+            walk_ext(&path, exts, out)?;
+        } else if path.extension().is_some_and(|e| exts.contains(&e)) {
             out.push(path);
         }
     }
@@ -114,6 +123,15 @@ pub struct WriteArgs {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WriteConfigArgs {
+    /// "config/aisle.conf", "config/pantry.conf", or a report template under
+    /// reports/ ending in .jinja, e.g. "reports/nutrition.md.jinja".
+    pub path: String,
+    /// Full file content.
+    pub content: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ShoppingArgs {
     /// Recipes and/or .menu plans, relative to the recipe root. Append `:N` to
     /// scale one, e.g. "Dinner/Pasta.cook:2".
@@ -142,28 +160,43 @@ impl CookMcp {
                 Err(e) => return Ok(workspace_err(e)),
             },
         };
-        let mut files = Vec::new();
-        if let Err(e) = walk(&dir, &mut files) {
-            return Ok(text_err(format!("cannot list {dir}: {e}")));
-        }
         let want = a.kind.as_deref().unwrap_or("all");
-        if !matches!(want, "all" | "recipe" | "menu") {
+        if !matches!(want, "all" | "recipe" | "menu" | "template") {
             return Ok(text_err(format!(
-                "unknown kind {want:?}: use \"recipe\", \"menu\" or \"all\""
+                "unknown kind {want:?}: use \"recipe\", \"menu\", \"all\" or \"template\""
             )));
+        }
+        let mut files = Vec::new();
+        let listed = if want == "template" {
+            // Templates live under reports/; a missing folder is just empty.
+            let reports = ws.root().join("reports");
+            if reports.is_dir() {
+                walk_ext(&reports, &["jinja"], &mut files)
+            } else {
+                Ok(())
+            }
+        } else {
+            walk(&dir, &mut files)
+        };
+        if let Err(e) = listed {
+            return Ok(text_err(format!("cannot list {dir}: {e}")));
         }
         let mut recipes: Vec<serde_json::Value> = files
             .iter()
             .filter(|p| match want {
                 "recipe" => p.extension() == Some("cook"),
                 "menu" => p.extension() == Some("menu"),
+                // `dir` narrows templates too.
+                "template" => p.starts_with(&dir),
                 _ => true,
             })
             .map(|p| {
-                serde_json::json!({
-                    "path": rel(ws, p),
-                    "kind": if p.extension() == Some("menu") { "menu" } else { "recipe" },
-                })
+                let kind = match p.extension() {
+                    Some("menu") => "menu",
+                    Some("jinja") => "template",
+                    _ => "recipe",
+                };
+                serde_json::json!({ "path": rel(ws, p), "kind": kind })
             })
             .collect();
         recipes.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
@@ -444,6 +477,23 @@ impl CookMcp {
     }
 
     #[tool(
+        description = "Save config/aisle.conf (store aisles for shopping lists), \
+        config/pantry.conf (pantry stock; creates it if missing) or a jinja report template \
+        under reports/ (path ending .jinja, rendered later with render_report template_path). \
+        Always the full file. Config problems come back as warnings in `diagnostics`; nothing is \
+        refused for them. Not for Cooklang: use write_recipe / write_menu."
+    )]
+    async fn write_config(
+        &self,
+        Parameters(a): Parameters<WriteConfigArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Ok(match self.workspace.write_config(&a.path, &a.content) {
+            Ok(report) => json_ok(&report),
+            Err(e) => workspace_err(e),
+        })
+    }
+
+    #[tool(
         description = "Build a shopping list from recipes and/or .menu plans: merges duplicate \
         ingredients, follows recipe references, groups by config/aisle.conf and subtracts \
         config/pantry.conf."
@@ -560,6 +610,85 @@ pub(crate) mod tests {
             .unwrap(),
         );
         assert_eq!(menus["recipes"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn list_recipes_kind_template_lists_report_templates_only() {
+        let (_d, ws) = fixture_workspace();
+        std::fs::create_dir_all(ws.root().join("reports/nutrition")).unwrap();
+        std::fs::write(ws.root().join("reports/nutrition/week.md.jinja"), "x").unwrap();
+        std::fs::write(ws.root().join("reports/notes.txt"), "x").unwrap();
+        std::fs::write(ws.root().join("Dinner/stray.jinja"), "x").unwrap();
+        let s = server(ws);
+        let v = json(
+            &s.list_recipes(Parameters(ListArgs {
+                dir: None,
+                kind: Some("template".into()),
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(
+            v["recipes"],
+            serde_json::json!([{ "path": "reports/nutrition/week.md.jinja", "kind": "template" }])
+        );
+        // The default listing stays Cooklang-only.
+        let all = json(
+            &s.list_recipes(Parameters(ListArgs {
+                dir: None,
+                kind: None,
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(all["recipes"].as_array().unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn list_recipes_kind_template_without_reports_folder_is_empty() {
+        let (_d, ws) = fixture_workspace();
+        let s = server(ws);
+        let v = json(
+            &s.list_recipes(Parameters(ListArgs {
+                dir: None,
+                kind: Some("template".into()),
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(v["recipes"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn write_config_writes_each_kind_and_refuses_others() {
+        let (_d, ws) = fixture_workspace();
+        let root = ws.root().to_owned();
+        let s = server(ws);
+        let write = |path: &str, content: &str| {
+            s.write_config(Parameters(WriteConfigArgs {
+                path: path.into(),
+                content: content.into(),
+            }))
+        };
+        for (path, content) in [
+            ("config/aisle.conf", "[produce]\nleek\n"),
+            ("config/pantry.conf", "[fridge]\nmilk = \"1%l\"\n"),
+            ("reports/cost.md.jinja", "{{ metadata.title }}"),
+        ] {
+            let r = write(path, content).await.unwrap();
+            assert_ne!(r.is_error, Some(true), "{path}: {}", text_of(&r));
+            assert_eq!(std::fs::read_to_string(root.join(path)).unwrap(), content);
+        }
+        for bad in ["reports/x.txt", "other/x.jinja", "Dinner/Pasta.cook"] {
+            let r = write(bad, "x").await.unwrap();
+            assert_eq!(r.is_error, Some(true), "{bad}");
+            assert!(
+                text_of(&r).contains("write_config writes"),
+                "{}",
+                text_of(&r)
+            );
+        }
+        assert!(!root.join("other/x.jinja").exists());
     }
 
     #[tokio::test]

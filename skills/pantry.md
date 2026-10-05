@@ -47,4 +47,5 @@ cumin = { bought = "2024-06-01" }
 ## Boundaries
 
 - Subtracting pantry stock from a shopping list is `shopping_list`'s job — never hand-edit totals.
-- `pantry_update` writes only the collection's own `config/pantry.conf` and refuses when that file doesn't exist (a global pantry is never modified). To start a pantry, the user creates an empty `config/pantry.conf` in the collection (or you do, with your client's file tools); then add items.
+- `pantry_update` writes only the collection's own `config/pantry.conf` and refuses when that file doesn't exist (a global pantry is never modified). To start a pantry, create it with `write_config` (`path: "config/pantry.conf"`, sections and items in the format above), then use `pantry_update` for changes.
+- Prefer `pantry_update` for changes to an existing pantry: it edits one item without rewriting the file. Use `write_config` on `config/pantry.conf` only to create it or to reorganise it wholesale (read it with `pantry_list` first; `write_config` replaces the whole file).

@@ -38,6 +38,12 @@ pub struct RenderRequest {
     /// exposes `scale` to templates). `.menu` plan quantities are not scaled.
     pub scale: Option<f64>,
     pub client_profile_path: Option<PathBuf>,
+    /// `config/aisle.conf` for `aisled()`.
+    pub aisle_path: Option<PathBuf>,
+    /// `config/pantry.conf` for `excluding_pantry()` / `from_pantry()`.
+    pub pantry_path: Option<PathBuf>,
+    /// YAML datastore folder for `db()`.
+    pub datastore_path: Option<PathBuf>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -171,6 +177,15 @@ pub fn render(
     if let Some(s) = req.scale {
         builder.scale(s);
     }
+    if let Some(p) = &req.aisle_path {
+        builder.aisle_path(p);
+    }
+    if let Some(p) = &req.pantry_path {
+        builder.pantry_path(p);
+    }
+    if let Some(p) = &req.datastore_path {
+        builder.datastore_path(p);
+    }
     let mut config = builder.build().with_extension(ext);
     if let Some(ctx) = client_ctx {
         config = config.with_context("client", ctx);
@@ -266,6 +281,9 @@ mod tests {
             base_path: None,
             scale: None,
             client_profile_path: None,
+            aisle_path: None,
+            pantry_path: None,
+            datastore_path: None,
         }
     }
 

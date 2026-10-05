@@ -168,8 +168,8 @@ impl CookMcp {
         if !pantry_in_root(&ctx, self.workspace.root()) {
             return Ok(text_err(
                 "No pantry in the recipe folder. Writes only touch <recipe root>/config/pantry.conf \
-                 (a global pantry, if any, is never modified): create config/pantry.conf in the recipe \
-                 folder first.",
+                 (a global pantry, if any, is never modified): create it first with write_config \
+                 (path \"config/pantry.conf\").",
             ));
         }
         let mut applied = Vec::new();

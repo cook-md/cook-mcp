@@ -10,8 +10,9 @@ meal plan — calories/macros/micronutrients, pass/fail checks against targets, 
 or allergens, or aggregating nutrition across a `.menu` plan. Backed by the **Cook
 nutrition service**, called through the `render_report` tool.
 
-This skill is for *nutrition* specifically. For plain counts and custom printouts,
-follow the report-authoring skill.
+This skill is for *nutrition* specifically. For plain counts, costs (`db()` datastore) and
+custom printouts, follow the report-authoring skill; its `aisled()` /
+`excluding_pantry()` / `db()` functions work inside nutrition templates too.
 
 ## Access
 
@@ -29,10 +30,9 @@ ingredient. `render_report` returns `{ rendered, checks, resolve_failures }`:
 ingredients the service couldn't resolve, each with an error code, message and
 `suggestions`.
 
-- **Reuse first:** saved templates conventionally live in `config/reports/`. If the
-  user names one (or your client can list that folder) and it answers the question,
-  check its inline targets/exclusions match the user's, then render it with
-  `template_path`. If the targets differ, author inline (or offer to update the saved
+- **Reuse first:** saved templates live under `reports/`; list them with
+  `list_recipes` `kind: "template"`. If one answers the question, check its inline
+  targets/exclusions match the user's, then render it with `template_path`. If the targets differ, author inline (or offer to update the saved
   template).
 - Otherwise draft inline (`template`) and iterate: read `rendered`, fix errors, repeat.
 - `input_path` is the `.cook`/`.menu` file as `list_recipes` returned it (e.g.
@@ -291,11 +291,10 @@ report once → ≤3-line summary.
 
 When the user wants to keep the report, save it as a `.jinja` file:
 
-- Put it in `config/reports/` by convention.
+- Put it under `reports/`.
 - Encode the output format in the inner extension: `nutrition.md.jinja` → markdown.
-- cook-mcp's write tools only write `.cook` and `.menu` files: save it with your
-  client's own file tools if it has them, otherwise give the user the template and
-  the path.
+- Save it with `write_config` (`path` e.g. `reports/nutrition.md.jinja`) and tell the
+  user where.
 - From then on, render it with `template_path` rather than re-sending the source.
 
 Render inline for one-off questions; offer once to save a template, and save only

@@ -345,6 +345,14 @@ impl CookMcp {
             }
             None => None,
         };
+        // Same aisle/pantry discovery as the other local tools (recipe root's
+        // config/, then the global config dir); `db()` reads `<root>/db`.
+        let ctx = ws.context();
+        let config_file = |c: &cookcli_core::ConfigSource| match c {
+            cookcli_core::ConfigSource::Path(p) => Some(p.as_std_path().to_path_buf()),
+            _ => None,
+        };
+        let db = ws.root().join("db");
         let req = RenderRequest {
             template,
             input,
@@ -352,6 +360,9 @@ impl CookMcp {
             base_path: Some(base_path),
             scale: a.scale,
             client_profile_path,
+            aisle_path: config_file(ctx.aisle()),
+            pantry_path: config_file(ctx.pantry()),
+            datastore_path: db.is_dir().then(|| db.into_std_path_buf()),
         };
         let api_url = self.cfg.api_url.clone();
         let bearer = self.auth.bearer().await;
@@ -1066,6 +1077,72 @@ mod tests {
             .unwrap();
         assert_ne!(r.is_error, Some(true), "{}", text_of(&r));
         assert!(text_of(&r).contains("flour"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn render_report_wires_aisle_pantry_and_datastore() {
+        let (_d, ws) = crate::test_support::fixture_workspace();
+        std::fs::create_dir_all(ws.root().join("db/eggs")).unwrap();
+        std::fs::write(ws.root().join("db/eggs/shopping.yml"), "price: 3.5\n").unwrap();
+        let s = CookMcp::new(crate::config::Config::from_vars(|_| None), ws);
+        let template = "{% for aisle, items in aisled(ingredients) | items %}\
+            {{ aisle }}:{% for i in items %}{{ i.name }},{% endfor %};{% endfor %}\
+            |{% for i in excluding_pantry(ingredients) %}{{ i.name }},{% endfor %}\
+            |{{ db('eggs.shopping.price') }}";
+        let r = s
+            .render_report(Parameters(RenderReportArgs {
+                template: Some(template.into()),
+                template_path: None,
+                input: None,
+                input_path: Some("Breakfast/Pancakes.cook".into()),
+                kind: None,
+                base_path: None,
+                scale: None,
+                client_profile_path: None,
+            }))
+            .await
+            .unwrap();
+        assert_ne!(r.is_error, Some(true), "{}", text_of(&r));
+        let v: serde_json::Value = serde_json::from_str(&text_of(&r)).unwrap();
+        let out = v["rendered"].as_str().unwrap();
+        assert!(out.contains("dairy:"), "aisle groups missing: {out}");
+        assert!(out.contains("pantry:flour,"), "{out}");
+        // butter, milk and flour are stocked in config/pantry.conf.
+        assert!(out.contains("|eggs,|"), "pantry not subtracted: {out}");
+        assert!(out.ends_with("|3.5"), "datastore not wired: {out}");
+    }
+
+    /// The cost example in skills/report-authoring.md must keep rendering.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn report_authoring_skill_cost_example_renders() {
+        let (_d, ws) = crate::test_support::fixture_workspace();
+        std::fs::create_dir_all(ws.root().join("db/eggs")).unwrap();
+        std::fs::write(ws.root().join("db/eggs/shopping.yml"), "price: 3.5\n").unwrap();
+        let skill = include_str!("../../skills/report-authoring.md");
+        let start = skill.find("{% set ns = namespace(total=0) %}").unwrap();
+        let end = start + skill[start..].find("```").unwrap();
+        let s = CookMcp::new(crate::config::Config::from_vars(|_| None), ws);
+        let r = s
+            .render_report(Parameters(RenderReportArgs {
+                template: Some(skill[start..end].into()),
+                template_path: None,
+                input: None,
+                input_path: Some("Breakfast/Pancakes.cook".into()),
+                kind: None,
+                base_path: None,
+                scale: None,
+                client_profile_path: None,
+            }))
+            .await
+            .unwrap();
+        assert_ne!(r.is_error, Some(true), "{}", text_of(&r));
+        let v: serde_json::Value = serde_json::from_str(&text_of(&r)).unwrap();
+        let out = v["rendered"].as_str().unwrap();
+        assert!(out.contains("eggs") && out.contains("3.5"), "{out}");
+        assert!(
+            !out.contains("flour"),
+            "pantry items should be skipped: {out}"
+        );
     }
 
     #[tokio::test]

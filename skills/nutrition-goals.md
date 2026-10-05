@@ -154,9 +154,7 @@ user will cook from.
 
 Offer (don't push) to save the targets as a reusable checks template so future
 edits can be re-validated (the nutrition-reports flow), at
-`config/reports/goals.<recipe-slug>.md.jinja`. cook-mcp's write tools only write
-`.cook`/`.menu`, so save it with your client's file tools or give the user the
-template and the path:
+`reports/goals.<recipe-slug>.md.jinja`, with `write_config`:
 
 ```jinja2
 {% import "ck" as ck %}
@@ -174,7 +172,7 @@ template and the path:
 **{{ checks | selectattr("ok") | list | length }} of {{ checks | length }} checks passed.**
 ```
 
-Render it later with `template_path: "config/reports/goals.<recipe-slug>.md.jinja"`.
+Render it later with `template_path: "reports/goals.<recipe-slug>.md.jinja"`.
 
 (`ck.min`/`ck.max`/`ck.range` take a target *object* like `{"min": 40}`;
 `ck.between` takes scalar bounds.)

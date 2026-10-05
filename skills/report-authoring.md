@@ -13,6 +13,9 @@ report template. For nutrition or dietitian-style evaluations, follow the
 nutrition-reports skill instead.
 
 Templates that don't call nutrition functions render locally, with no login.
+Datastore values live in YAML files under `db/`; cook-mcp has no tool that
+writes them, so ask the user to add data there (or use your client's file
+tools).
 
 ## The tool
 
@@ -23,7 +26,7 @@ naming the template line. It never edits files.
 Arguments — the template, **exactly one** of:
 - `template` — inline Jinja2 source, for drafts and one-off reports.
 - `template_path` — a saved template file, relative to the collection root
-  (e.g. `config/reports/cost.md.jinja`). Prefer it whenever a suitable saved
+  (e.g. `reports/cost.md.jinja`). Prefer it whenever a suitable saved
   template exists.
 
 The input, **exactly one** of:
@@ -46,6 +49,17 @@ Within a template you have:
 - For `.menu` input: `plan` — the plan's days and meals with their expanded
   ingredients (a menu is read through `plan.*`, not `ingredients`).
 
+Collection data:
+- `aisled(ingredients)` — groups ingredients by store aisle from
+  `config/aisle.conf`: a map of aisle → items, unlisted items under `other`.
+  Use it with `| items`.
+- `excluding_pantry(ingredients)` — drops ingredients already in
+  `config/pantry.conf`; `from_pantry(ingredients)` keeps only those.
+- `db('key.path')` — reads the collection's YAML datastore, the `db/` folder
+  at the root: `db('eggs.shopping.price')` is the `price` key of
+  `db/eggs/shopping.yml`. Use it for per-ingredient data the recipes don't
+  carry (prices, shelf life, densities). A missing key renders empty.
+
 Filters available:
 - Standard Jinja: `sort(attribute='name')`, `default(...)`, `round`, `join`,
   `selectattr`, `items`, `length`.
@@ -63,14 +77,29 @@ Example — an ingredients list:
 {% endfor %}
 ```
 
-For a shopping list, use the `shopping_list` tool rather than a template: it
-merges duplicates, groups by aisle and subtracts the pantry.
+Example — a cost estimate from the datastore, skipping what's in stock:
+
+```jinja
+{% set ns = namespace(total=0) %}
+{% for aisle, items in aisled(excluding_pantry(ingredients)) | items %}
+## {{ aisle | titleize }}
+{% for i in items -%}
+{% set price = db(i.name ~ '.shopping.price') %}
+- {{ i.name }}{% if price %}: {{ price | format_price }}{% set ns.total = ns.total + price %}{% endif %}
+{% endfor %}
+{% endfor %}
+**Estimated total:** {{ ns.total | format_price }}
+```
+
+For a plain shopping list, use the `shopping_list` tool rather than a template:
+it merges duplicates across recipes, groups by aisle and subtracts the pantry.
 
 ## Workflow: reuse or author -> render -> present
 
-1. Saved templates conventionally live in `config/reports/` (or `reports/`) in
-   the collection. If the user names one, or your client can list that folder,
-   render it with `template_path` and skip to step 4.
+1. Saved templates live under `reports/` in the collection: list them with
+   `list_recipes` `kind: "template"`. If one matches the request (read the name;
+   ask the user when it isn't conclusive), render it with `template_path` and
+   skip to step 4.
 2. Otherwise draft the template inline.
 3. Call `render_report` with `template`. If it errors, read the message
    (minijinja reports the line), fix the template, and render again until it
@@ -82,13 +111,12 @@ merges duplicates, groups by aisle and subtracts the pantry.
 ## Saving a reusable template
 
 When the user wants to keep a report, save the template as a `.jinja` file:
-- Put templates in `config/reports/` by convention.
+- Put templates under `reports/` (subfolders are fine).
 - Declare the output format via the inner extension:
   `weekly-cost.md.jinja` -> markdown, `menu.html.jinja` -> HTML,
   `shopping.txt.jinja` -> plain text.
-- cook-mcp's write tools only write `.cook` and `.menu` files. Save the
-  template with your client's own file tools if it has them; otherwise give
-  the user the full template and the path to save it at.
+- Save it with `write_config` (`path` e.g. `reports/weekly-cost.md.jinja`,
+  the full template as `content`), and tell the user where.
 - From then on, render it with `template_path` — never re-send the source
   inline.
 
