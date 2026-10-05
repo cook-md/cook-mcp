@@ -11,6 +11,8 @@ use store::StoredAuth;
 /// tokens when they're within 24h of expiry; clears them on renew-401.
 pub struct AuthManager {
     pub path: PathBuf,
+    /// Legacy nutrition-mcp login path, cleared on logout (None with an override).
+    legacy: Option<PathBuf>,
     cookmd_url: String,
     token_override: Option<String>,
     cached: Mutex<Option<StoredAuth>>,
@@ -18,18 +20,19 @@ pub struct AuthManager {
 
 impl AuthManager {
     pub fn new(cfg: &Config) -> Self {
-        let path = match &cfg.auth_path {
-            Some(p) => p.clone(),
+        let (path, legacy) = match &cfg.auth_path {
+            Some(p) => (p.clone(), None),
             None => {
                 let path = store::default_path();
                 if let Err(e) = store::migrate_legacy(&path, &store::legacy_path()) {
                     tracing::warn!("could not migrate nutrition-mcp login: {e:#}");
                 }
-                path
+                (path, Some(store::legacy_path()))
             }
         };
         Self {
             path,
+            legacy,
             cookmd_url: cfg.cookmd_url.clone(),
             token_override: cfg.token_override.clone(),
             cached: Mutex::new(None),
@@ -91,6 +94,9 @@ impl AuthManager {
 
     pub fn logout(&self) -> anyhow::Result<()> {
         *self.cached.lock().unwrap() = None;
+        if let Some(legacy) = &self.legacy {
+            let _ = store::clear(legacy);
+        }
         store::clear(&self.path)
     }
 }

@@ -49,17 +49,31 @@ fn config_root() -> PathBuf {
     dirs::config_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// Copy a nutrition-mcp login to the cook-mcp path once, so users upgrading
+/// Move a nutrition-mcp login to the cook-mcp path once, so users upgrading
 /// through the npm shim stay logged in. Never overwrites an existing login.
-/// `fs::copy` keeps the 0600 mode `save` gave the original on unix.
+/// The copy is atomic (temp file in the destination dir, then rename), private
+/// (0600 on unix), and the legacy file is removed afterwards (best effort) so a
+/// later logout cannot be undone by re-migrating.
 pub fn migrate_legacy(new: &Path, legacy: &Path) -> anyhow::Result<bool> {
+    use std::io::Write as _;
     if new.exists() || !legacy.exists() {
         return Ok(false);
     }
-    if let Some(dir) = new.parent() {
-        std::fs::create_dir_all(dir)?;
+    let dir = new
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("auth path has no parent directory"))?;
+    std::fs::create_dir_all(dir)?;
+    let bytes = std::fs::read(legacy)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(&bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        tmp.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
-    std::fs::copy(legacy, new)?;
+    tmp.persist(new).map_err(|e| e.error)?;
+    let _ = std::fs::remove_file(legacy);
     Ok(true)
 }
 
@@ -217,5 +231,45 @@ mod tests {
     fn default_path_is_cook_mcp() {
         assert!(default_path().ends_with("cook-mcp/auth.json"));
         assert!(legacy_path().ends_with("nutrition-mcp/auth.json"));
+    }
+
+    #[test]
+    fn logout_after_migrate_is_not_resurrected() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("nutrition-mcp/auth.json");
+        let new = dir.path().join("cook-mcp/auth.json");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, r#"{"token":"t"}"#).unwrap();
+        assert!(migrate_legacy(&new, &legacy).unwrap());
+        assert!(!legacy.exists(), "legacy login is moved, not copied");
+        clear(&new).unwrap();
+        clear(&legacy).unwrap();
+        assert!(!migrate_legacy(&new, &legacy).unwrap());
+        assert!(!new.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migrated_file_is_private() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("old.json");
+        let new = dir.path().join("cook-mcp/auth.json");
+        std::fs::write(&legacy, "{}").unwrap();
+        std::fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(migrate_legacy(&new, &legacy).unwrap());
+        let mode = std::fs::metadata(&new).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn migrate_errors_when_parent_is_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("old.json");
+        std::fs::write(&legacy, "{}").unwrap();
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, "x").unwrap();
+        assert!(migrate_legacy(&blocker.join("auth.json"), &legacy).is_err());
+        assert!(legacy.exists());
     }
 }
