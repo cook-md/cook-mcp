@@ -71,7 +71,10 @@ mod tests {
         assert_eq!(c.api_url, "http://127.0.0.1:8080");
         assert_eq!(c.cookmd_url, "http://127.0.0.1:3000");
         assert_eq!(c.token_override.as_deref(), Some("org-key"));
-        assert_eq!(c.recipes_dir.as_deref(), Some(std::path::Path::new("/tmp/recipes")));
+        assert_eq!(
+            c.recipes_dir.as_deref(),
+            Some(std::path::Path::new("/tmp/recipes"))
+        );
     }
 
     #[test]
@@ -81,14 +84,24 @@ mod tests {
             "NUTRITION_MCP_AUTH_PATH" => Some("/old.json".into()),
             _ => None,
         });
-        assert_eq!(both.auth_path.as_deref(), Some(std::path::Path::new("/new.json")));
-        let legacy = Config::from_vars(|k| (k == "NUTRITION_MCP_AUTH_PATH").then(|| "/old.json".into()));
-        assert_eq!(legacy.auth_path.as_deref(), Some(std::path::Path::new("/old.json")));
+        assert_eq!(
+            both.auth_path.as_deref(),
+            Some(std::path::Path::new("/new.json"))
+        );
+        let legacy =
+            Config::from_vars(|k| (k == "NUTRITION_MCP_AUTH_PATH").then(|| "/old.json".into()));
+        assert_eq!(
+            legacy.auth_path.as_deref(),
+            Some(std::path::Path::new("/old.json"))
+        );
     }
 
     #[test]
     fn pricing_url_is_tagged_for_attribution() {
         let c = Config::from_vars(|_| None);
-        assert_eq!(c.pricing_url(), "https://cook.md/pricing?utm_source=cook-mcp");
+        assert_eq!(
+            c.pricing_url(),
+            "https://cook.md/pricing?utm_source=cook-mcp"
+        );
     }
 }

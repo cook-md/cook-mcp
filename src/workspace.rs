@@ -18,7 +18,9 @@ pub struct Workspace {
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceError {
-    #[error("path `{0}` is not a plain relative path inside the recipe root (no `..`, no leading `./`)")]
+    #[error(
+        "path `{0}` is not a plain relative path inside the recipe root (no `..`, no leading `./`)"
+    )]
     UnsafePath(String),
     #[error("path `{path}` resolves outside the recipe root {root}")]
     Escapes { path: String, root: String },
@@ -91,7 +93,12 @@ impl Workspace {
             return Err(unsafe_path());
         }
         // Rebuild from components so `a//b.cook` is reported as `a/b.cook`.
-        Ok(rel.components().map(|c| c.as_str()).collect::<Vec<_>>().join("/").into())
+        Ok(rel
+            .components()
+            .map(|c| c.as_str())
+            .collect::<Vec<_>>()
+            .join("/")
+            .into())
     }
 
     /// Absolute path for `path`, refusing anything that escapes the root,
@@ -107,7 +114,10 @@ impl Workspace {
         }
         let canon = std::fs::canonicalize(probe).map_err(|e| WorkspaceError::Io(e.to_string()))?;
         if !canon.starts_with(self.root.as_std_path()) {
-            return Err(WorkspaceError::Escapes { path: path.into(), root: self.root.to_string() });
+            return Err(WorkspaceError::Escapes {
+                path: path.into(),
+                root: self.root.to_string(),
+            });
         }
         Ok(full)
     }
@@ -156,11 +166,18 @@ impl Workspace {
                 let mut diags = outcome.diagnostics;
                 let from = rel.parent().unwrap_or(Utf8Path::new("")).to_owned();
                 for ingredient in &outcome.value.ingredients {
-                    let Some(r) = ingredient.reference.as_ref() else { continue };
-                    let reference = if r.components.is_empty() { r.name.clone() } else { r.path("/") };
-                    let found = cookcli_core::resolve_reference(&from, &reference).is_some_and(|p| {
-                        cookcli_core::find::get_recipe(&self.root, p.as_str()).is_ok()
-                    });
+                    let Some(r) = ingredient.reference.as_ref() else {
+                        continue;
+                    };
+                    let reference = if r.components.is_empty() {
+                        r.name.clone()
+                    } else {
+                        r.path("/")
+                    };
+                    let found =
+                        cookcli_core::resolve_reference(&from, &reference).is_some_and(|p| {
+                            cookcli_core::find::get_recipe(&self.root, p.as_str()).is_ok()
+                        });
                     if !found {
                         diags.push(
                             Diagnostic::error(format!(
@@ -176,7 +193,12 @@ impl Workspace {
     }
 
     /// Validate, then atomically write `content` to `path`.
-    pub fn write(&self, path: &str, content: &str, force: bool) -> Result<WriteReport, WorkspaceError> {
+    pub fn write(
+        &self,
+        path: &str,
+        content: &str,
+        force: bool,
+    ) -> Result<WriteReport, WorkspaceError> {
         let rel = self.relative(path)?;
         let kind = writable_kind(&rel).ok_or_else(|| WorkspaceError::Extension(path.into()))?;
         let full = self.resolve(path)?;
@@ -231,7 +253,10 @@ fn write_atomically(path: &Utf8Path, content: &str) -> Result<(), WorkspaceError
         SEQ.fetch_add(1, Ordering::Relaxed)
     ));
     let written = (|| -> std::io::Result<()> {
-        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temp)?;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
         file.write_all(content.as_bytes())?;
         file.flush()?;
         file.sync_all()?;
@@ -264,7 +289,10 @@ mod tests {
     fn absolute_path_inside_root_is_accepted() {
         let (_d, ws) = fixture_workspace();
         let abs = ws.root().join("Breakfast/Pancakes.cook");
-        assert_eq!(ws.relative(abs.as_str()).unwrap(), "Breakfast/Pancakes.cook");
+        assert_eq!(
+            ws.relative(abs.as_str()).unwrap(),
+            "Breakfast/Pancakes.cook"
+        );
     }
 
     #[test]
@@ -281,7 +309,10 @@ mod tests {
         let (_d, ws) = fixture_workspace();
         let outside = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(outside.path(), ws.root().join("Linked")).unwrap();
-        assert!(matches!(ws.resolve("Linked/x.cook"), Err(WorkspaceError::Escapes { .. })));
+        assert!(matches!(
+            ws.resolve("Linked/x.cook"),
+            Err(WorkspaceError::Escapes { .. })
+        ));
     }
 
     #[test]
@@ -299,7 +330,10 @@ mod tests {
         assert_eq!((r.path.as_str(), r.status), ("Lunch/Eggs.cook", "created"));
         let r = ws.write("Lunch/Eggs.cook", GOOD, false).unwrap();
         assert_eq!(r.status, "overwritten");
-        assert_eq!(std::fs::read_to_string(ws.root().join("Lunch/Eggs.cook")).unwrap(), GOOD);
+        assert_eq!(
+            std::fs::read_to_string(ws.root().join("Lunch/Eggs.cook")).unwrap(),
+            GOOD
+        );
     }
 
     #[test]
@@ -320,17 +354,25 @@ mod tests {
     fn legacy_metadata_is_refused_even_with_force() {
         let (_d, ws) = fixture_workspace();
         let legacy = ">> servings: 2\nFry @eggs{2}.\n";
-        assert!(matches!(ws.write("Old.cook", legacy, true), Err(WorkspaceError::LegacyMetadata)));
+        assert!(matches!(
+            ws.write("Old.cook", legacy, true),
+            Err(WorkspaceError::LegacyMetadata)
+        ));
     }
 
     #[test]
     fn broken_recipe_reference_is_an_error() {
         let (_d, ws) = fixture_workspace();
         let menu = "==Tue==\n\nDinner: \\\n- @./Dinner/Missing{2%servings}\n";
-        let Err(WorkspaceError::Invalid { diagnostics }) = ws.write("Plans/Tue.menu", menu, false) else {
+        let Err(WorkspaceError::Invalid { diagnostics }) = ws.write("Plans/Tue.menu", menu, false)
+        else {
             panic!("expected Invalid for a broken reference");
         };
-        assert!(diagnostics.iter().any(|d| d.message.contains("./Dinner/Missing")));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("./Dinner/Missing"))
+        );
         let ok = "==Tue==\n\nDinner: \\\n- @./Dinner/Pasta{2%servings}\n";
         assert!(ws.write("Plans/Tue.menu", ok, false).is_ok());
     }
@@ -338,9 +380,18 @@ mod tests {
     #[test]
     fn only_cooklang_and_config_files_are_writable() {
         let (_d, ws) = fixture_workspace();
-        assert!(matches!(ws.write("notes.txt", "hi", true), Err(WorkspaceError::Extension(_))));
-        assert!(matches!(ws.write("config/other.conf", "x", true), Err(WorkspaceError::Extension(_))));
-        assert!(ws.write("config/aisle.conf", "[produce]\nleek\n", false).is_ok());
+        assert!(matches!(
+            ws.write("notes.txt", "hi", true),
+            Err(WorkspaceError::Extension(_))
+        ));
+        assert!(matches!(
+            ws.write("config/other.conf", "x", true),
+            Err(WorkspaceError::Extension(_))
+        ));
+        assert!(
+            ws.write("config/aisle.conf", "[produce]\nleek\n", false)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -372,10 +423,19 @@ mod tests {
     #[test]
     fn write_goes_through_in_root_symlink() {
         let (_d, ws) = fixture_workspace();
-        std::os::unix::fs::symlink("Shared/Tomato Sauce.cook", ws.root().join("Link.cook")).unwrap();
+        std::os::unix::fs::symlink("Shared/Tomato Sauce.cook", ws.root().join("Link.cook"))
+            .unwrap();
         ws.write("Link.cook", GOOD, false).unwrap();
-        assert!(std::fs::symlink_metadata(ws.root().join("Link.cook")).unwrap().file_type().is_symlink());
-        assert_eq!(std::fs::read_to_string(ws.root().join("Shared/Tomato Sauce.cook")).unwrap(), GOOD);
+        assert!(
+            std::fs::symlink_metadata(ws.root().join("Link.cook"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_to_string(ws.root().join("Shared/Tomato Sauce.cook")).unwrap(),
+            GOOD
+        );
     }
 
     #[cfg(unix)]
@@ -387,7 +447,10 @@ mod tests {
         std::os::unix::fs::symlink(d.path(), &link).unwrap();
         let ws = Workspace::new(&link).unwrap();
         let abs = link.join("Breakfast/Pancakes.cook");
-        assert_eq!(ws.relative(abs.to_str().unwrap()).unwrap(), "Breakfast/Pancakes.cook");
+        assert_eq!(
+            ws.relative(abs.to_str().unwrap()).unwrap(),
+            "Breakfast/Pancakes.cook"
+        );
         let err = ws.relative("/etc/passwd").unwrap_err().to_string();
         assert!(err.contains(ws.root().as_str()), "{err}");
     }
@@ -402,8 +465,18 @@ mod tests {
     #[test]
     fn trailing_slash_backslash_and_nul_are_refused() {
         let (_d, ws) = fixture_workspace();
-        for bad in ["Dinner/", "Dinner\\", "a\\b.cook", "a/b\\.cook", "a\0b.cook", "a/\0"] {
-            assert!(matches!(ws.relative(bad), Err(WorkspaceError::UnsafePath(_))), "{bad:?}");
+        for bad in [
+            "Dinner/",
+            "Dinner\\",
+            "a\\b.cook",
+            "a/b\\.cook",
+            "a\0b.cook",
+            "a/\0",
+        ] {
+            assert!(
+                matches!(ws.relative(bad), Err(WorkspaceError::UnsafePath(_))),
+                "{bad:?}"
+            );
         }
     }
 }

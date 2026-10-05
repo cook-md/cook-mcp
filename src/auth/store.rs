@@ -215,7 +215,10 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&new).unwrap(), r#"{"token":"t"}"#);
 
         std::fs::write(&legacy, r#"{"token":"newer"}"#).unwrap();
-        assert!(!migrate_legacy(&new, &legacy).unwrap(), "never overwrites an existing login");
+        assert!(
+            !migrate_legacy(&new, &legacy).unwrap(),
+            "never overwrites an existing login"
+        );
         assert_eq!(std::fs::read_to_string(&new).unwrap(), r#"{"token":"t"}"#);
     }
 

@@ -217,12 +217,7 @@ mod tests {
         let ApiOutcome::Err { body, .. } = api.get("/nutrition", &[]).await.unwrap() else {
             panic!()
         };
-        assert!(
-            body["checkout_url"]
-                .as_str()
-                .unwrap()
-                .contains("/pricing")
-        );
+        assert!(body["checkout_url"].as_str().unwrap().contains("/pricing"));
     }
 
     #[tokio::test]
