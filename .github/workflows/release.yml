@@ -1,0 +1,120 @@
+name: Release
+
+# Tag `vX.Y.Z` on this repo →
+#   1. cross-build cook-mcp binaries for mac/linux x64+arm64,
+#   2. publish them as GitHub release `vX.Y.Z` on this repo,
+#   3. publish npm wrapper @cookmd/mcp@X.Y.Z (postinstall downloads the
+#      matching binary from that release) and the @cookmd/nutrition-mcp shim.
+# npm publishes via OIDC trusted publishing (no token). The trusted publisher
+# for BOTH @cookmd/mcp and @cookmd/nutrition-mcp on npmjs.com must point at
+# repo cook-md/cook-mcp, workflow release.yml (plan Task 18).
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    strategy:
+      matrix:
+        include:
+          # macos-13 (Intel) runners are retired: cross-compile x86_64 from
+          # the arm64 macos-14 runner (Apple toolchains support this natively).
+          - { os: macos-14, target: x86_64-apple-darwin }
+          - { os: macos-14, target: aarch64-apple-darwin }
+          # glibc floor: build linux binaries on 22.04 (glibc 2.35) so they run
+          # on Ubuntu 22.04 LTS and Debian 12.
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package tarball
+        run: |
+          tar -czf cook-mcp-${{ matrix.target }}.tar.gz \
+            -C target/${{ matrix.target }}/release cook-mcp
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cook-mcp-${{ matrix.target }}
+          path: cook-mcp-${{ matrix.target }}.tar.gz
+
+  publish:
+    name: Publish release + npm
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      # npm OIDC trusted publishing: no NPM_TOKEN secret needed.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create release
+        # Retry via "re-run failed jobs" only: a full re-run rebuilds binaries
+        # and would clobber assets whose checksums are frozen in the published
+        # npm package.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Create-if-missing then upload with --clobber so a failed npm
+          # publish can be retried without a "release already exists" error.
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" \
+                 --title "cook-mcp $GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" --clobber cook-mcp-*.tar.gz
+
+      - name: Write binary checksums into npm package
+        run: |
+          # install.js verifies the downloaded tarball against these SHA-256
+          # sums, so a tampered or corrupted download is refused, including
+          # when COOK_MCP_DOWNLOAD_BASE points at an internal mirror.
+          for f in cook-mcp-*.tar.gz; do
+            target="${f#cook-mcp-}"; target="${target%.tar.gz}"
+            printf '%s %s\n' "$target" "$(sha256sum "$f" | cut -d' ' -f1)"
+          done | jq -Rn '[inputs | split(" ") | {(.[0]): .[1]}] | add' \
+            > packaging/npm/checksums.json
+          cat packaging/npm/checksums.json
+
+      - uses: actions/setup-node@v4
+        with:
+          # npm >= 11.5.1 required for OIDC trusted publishing; node 24 bundles it.
+          # No registry-url here: that injects a NODE_AUTH_TOKEN-based .npmrc,
+          # which breaks when no token env is set. OIDC needs neither.
+          node-version: 24
+
+      - name: Publish @cookmd/mcp
+        working-directory: packaging/npm
+        run: |
+          # tag v0.2.0 → npm version 0.2.0; install.js re-derives the
+          # release URL as v${version}, closing the loop with the gh release.
+          VERSION="${GITHUB_REF_NAME#v}"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          npm publish --access public
+
+      - name: Publish @cookmd/nutrition-mcp shim
+        working-directory: packaging/npm-shim
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          npm pkg set version="$VERSION" dependencies.@cookmd/mcp="$VERSION"
+          npm publish --access public

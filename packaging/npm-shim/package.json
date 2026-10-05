@@ -1,0 +1,10 @@
+{
+  "name": "@cookmd/nutrition-mcp",
+  "version": "0.2.0",
+  "description": "Renamed to @cookmd/mcp. This package runs it, so existing configs keep working.",
+  "bin": { "nutrition-mcp": "bin/nutrition-mcp.js" },
+  "dependencies": { "@cookmd/mcp": "0.2.0" },
+  "files": ["bin/"],
+  "license": "MIT",
+  "engines": { "node": ">=18" }
+}

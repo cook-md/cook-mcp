@@ -1,10 +1,12 @@
 {
-  "name": "@cookmd/nutrition-mcp",
-  "version": "0.1.0",
-  "description": "MCP server for cook.md nutrition evaluation and cooklang report rendering",
-  "bin": { "nutrition-mcp": "bin/nutrition-mcp.js" },
+  "name": "@cookmd/mcp",
+  "version": "0.2.0",
+  "description": "MCP server for Cooklang recipes and cook.md: validate, plan, shop, pantry, reports, nutrition and import",
+  "bin": { "cook-mcp": "bin/cook-mcp.js" },
   "scripts": { "postinstall": "node install.js" },
   "files": ["bin/", "install.js", "checksums.json"],
-  "license": "SEE LICENSE AT https://cook.md",
+  "license": "MIT",
+  "repository": "github:cook-md/cook-mcp",
+  "homepage": "https://cook.md/help/mcp",
   "engines": { "node": ">=18" }
 }
