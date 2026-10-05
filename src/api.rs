@@ -109,7 +109,7 @@ impl ApiClient {
                     );
                 }
                 403 => {
-                    obj.insert("checkout_url".into(), self.cfg.checkout_url().into());
+                    obj.insert("checkout_url".into(), self.cfg.pricing_url().into());
                     obj.insert(
                         "hint".into(),
                         "Authenticated but no active Cook Pro subscription. \
@@ -221,7 +221,7 @@ mod tests {
             body["checkout_url"]
                 .as_str()
                 .unwrap()
-                .contains("/checkout/")
+                .contains("/pricing")
         );
     }
 
