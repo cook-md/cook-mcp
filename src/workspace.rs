@@ -11,14 +11,17 @@ use crate::config::Config;
 pub struct Workspace {
     /// Canonical (symlinks resolved), so `starts_with` checks are meaningful.
     root: Utf8PathBuf,
+    /// The root as the caller gave it (absolute, symlinks kept), so absolute
+    /// paths built from it are accepted too.
+    given_root: Utf8PathBuf,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceError {
     #[error("path `{0}` is not a plain relative path inside the recipe root (no `..`, no leading `./`)")]
     UnsafePath(String),
-    #[error("path `{0}` resolves outside the recipe root")]
-    Escapes(String),
+    #[error("path `{path}` resolves outside the recipe root {root}")]
+    Escapes { path: String, root: String },
     #[error(
         "cannot write `{0}`: only .cook and .menu files, config/aisle.conf and config/pantry.conf can be written"
     )]
@@ -36,11 +39,14 @@ pub enum WorkspaceError {
 impl Workspace {
     pub fn new(root: impl AsRef<std::path::Path>) -> anyhow::Result<Self> {
         let root = root.as_ref();
+        let given = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
+        let given_root = Utf8PathBuf::from_path_buf(given)
+            .map_err(|p| anyhow!("recipe root {} is not valid UTF-8", p.display()))?;
         let canon = std::fs::canonicalize(root)
             .with_context(|| format!("recipe root {} does not exist", root.display()))?;
         let root = Utf8PathBuf::from_path_buf(canon)
             .map_err(|p| anyhow!("recipe root {} is not valid UTF-8", p.display()))?;
-        Ok(Self { root })
+        Ok(Self { root, given_root })
     }
 
     /// `COOK_RECIPES_DIR`, else the process working directory (MCP clients
@@ -65,18 +71,27 @@ impl Workspace {
     /// The caller's path relative to the root. Absolute paths are accepted
     /// only when they sit under the (canonical) root.
     pub fn relative(&self, path: &str) -> Result<Utf8PathBuf, WorkspaceError> {
+        let unsafe_path = || WorkspaceError::UnsafePath(path.into());
+        if path.contains(['\\', '\0']) || path.ends_with('/') {
+            return Err(unsafe_path());
+        }
         let p = Utf8Path::new(path);
         let rel = if p.is_absolute() {
             p.strip_prefix(&self.root)
-                .map_err(|_| WorkspaceError::Escapes(path.into()))?
+                .or_else(|_| p.strip_prefix(&self.given_root))
+                .map_err(|_| WorkspaceError::Escapes {
+                    path: path.into(),
+                    root: self.root.to_string(),
+                })?
                 .to_owned()
         } else {
             p.to_owned()
         };
         if rel.as_str().is_empty() || !cookcli_core::is_safe_relative_path(rel.as_str()) {
-            return Err(WorkspaceError::UnsafePath(path.into()));
+            return Err(unsafe_path());
         }
-        Ok(rel)
+        // Rebuild from components so `a//b.cook` is reported as `a/b.cook`.
+        Ok(rel.components().map(|c| c.as_str()).collect::<Vec<_>>().join("/").into())
     }
 
     /// Absolute path for `path`, refusing anything that escapes the root,
@@ -92,7 +107,7 @@ impl Workspace {
         }
         let canon = std::fs::canonicalize(probe).map_err(|e| WorkspaceError::Io(e.to_string()))?;
         if !canon.starts_with(self.root.as_std_path()) {
-            return Err(WorkspaceError::Escapes(path.into()));
+            return Err(WorkspaceError::Escapes { path: path.into(), root: self.root.to_string() });
         }
         Ok(full)
     }
@@ -178,7 +193,17 @@ impl Workspace {
             return Err(WorkspaceError::Invalid { diagnostics });
         }
         let existed = full.exists();
-        write_atomically(&full, content)?;
+        // `resolve` proved an existing target sits inside the root; write to
+        // what a symlink points at so the link stays a link.
+        let target = if existed {
+            std::fs::canonicalize(&full)
+                .ok()
+                .and_then(|p| Utf8PathBuf::from_path_buf(p).ok())
+                .unwrap_or_else(|| full.clone())
+        } else {
+            full.clone()
+        };
+        write_atomically(&target, content)?;
         Ok(WriteReport {
             path: rel.to_string(),
             status: if existed { "overwritten" } else { "created" },
@@ -187,14 +212,39 @@ impl Workspace {
     }
 }
 
+/// Same approach as `cookcli-core`'s `fs_atomic`: a temp file beside the
+/// target, fsynced, given the old file's permissions (a new file gets the
+/// process umask default), then renamed over it.
 fn write_atomically(path: &Utf8Path, content: &str) -> Result<(), WorkspaceError> {
+    use std::io::Write as _;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
     let io = |e: std::io::Error| WorkspaceError::Io(e.to_string());
     let dir = path.parent().expect("resolved paths sit inside the root");
     // Safe: `resolve` already checked the deepest existing ancestor.
     std::fs::create_dir_all(dir).map_err(io)?;
-    let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(io)?;
-    std::io::Write::write_all(&mut tmp, content.as_bytes()).map_err(io)?;
-    tmp.persist(path).map_err(|e| io(e.error))?;
+    let name = path.file_name().unwrap_or("file");
+    let temp = dir.join(format!(
+        ".{name}.{}.{}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let written = (|| -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temp)?;
+        file.write_all(content.as_bytes())?;
+        file.flush()?;
+        file.sync_all()?;
+        drop(file);
+        if let Ok(meta) = std::fs::metadata(path) {
+            std::fs::set_permissions(&temp, meta.permissions())?;
+        }
+        std::fs::rename(&temp, path)
+    })();
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&temp);
+        return Err(io(e));
+    }
     Ok(())
 }
 
@@ -231,7 +281,7 @@ mod tests {
         let (_d, ws) = fixture_workspace();
         let outside = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(outside.path(), ws.root().join("Linked")).unwrap();
-        assert!(matches!(ws.resolve("Linked/x.cook"), Err(WorkspaceError::Escapes(_))));
+        assert!(matches!(ws.resolve("Linked/x.cook"), Err(WorkspaceError::Escapes { .. })));
     }
 
     #[test]
@@ -299,5 +349,61 @@ mod tests {
         let diags = ws.check("Add @{1%tsp}.\n", Utf8Path::new("X.cook"));
         assert!(diags.iter().any(|d| d.severity == Severity::Error));
         assert!(!ws.root().join("X.cook").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn overwrite_keeps_permissions_and_new_files_are_not_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_d, ws) = fixture_workspace();
+        let existing = ws.root().join("Breakfast/Pancakes.cook");
+        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o644)).unwrap();
+        ws.write("Breakfast/Pancakes.cook", GOOD, false).unwrap();
+        let mode = |p: &Utf8Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&existing), 0o644);
+        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o600)).unwrap();
+        ws.write("Breakfast/Pancakes.cook", GOOD, false).unwrap();
+        assert_eq!(mode(&existing), 0o600);
+        ws.write("New.cook", GOOD, false).unwrap();
+        assert_ne!(mode(&ws.root().join("New.cook")), 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_goes_through_in_root_symlink() {
+        let (_d, ws) = fixture_workspace();
+        std::os::unix::fs::symlink("Shared/Tomato Sauce.cook", ws.root().join("Link.cook")).unwrap();
+        ws.write("Link.cook", GOOD, false).unwrap();
+        assert!(std::fs::symlink_metadata(ws.root().join("Link.cook")).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(ws.root().join("Shared/Tomato Sauce.cook")).unwrap(), GOOD);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn absolute_path_via_given_non_canonical_root_is_accepted() {
+        let (d, _ws) = fixture_workspace();
+        let holder = tempfile::tempdir().unwrap();
+        let link = holder.path().join("link");
+        std::os::unix::fs::symlink(d.path(), &link).unwrap();
+        let ws = Workspace::new(&link).unwrap();
+        let abs = link.join("Breakfast/Pancakes.cook");
+        assert_eq!(ws.relative(abs.to_str().unwrap()).unwrap(), "Breakfast/Pancakes.cook");
+        let err = ws.relative("/etc/passwd").unwrap_err().to_string();
+        assert!(err.contains(ws.root().as_str()), "{err}");
+    }
+
+    #[test]
+    fn double_slashes_are_normalized() {
+        let (_d, ws) = fixture_workspace();
+        let r = ws.write("a//b.cook", GOOD, false).unwrap();
+        assert_eq!(r.path, "a/b.cook");
+    }
+
+    #[test]
+    fn trailing_slash_backslash_and_nul_are_refused() {
+        let (_d, ws) = fixture_workspace();
+        for bad in ["Dinner/", "Dinner\\", "a\\b.cook", "a/b\\.cook", "a\0b.cook", "a/\0"] {
+            assert!(matches!(ws.relative(bad), Err(WorkspaceError::UnsafePath(_))), "{bad:?}");
+        }
     }
 }
