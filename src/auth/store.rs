@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
-/// Persisted login: `~/.config/nutrition-mcp/auth.json`, chmod 0600 — same
+/// Persisted login: `~/.config/cook-mcp/auth.json`, chmod 0600 — same
 /// convention as cookbot's `~/.cookbot/auth.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredAuth {
@@ -37,10 +37,30 @@ impl StoredAuth {
 }
 
 pub fn default_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("nutrition-mcp")
-        .join("auth.json")
+    config_root().join("cook-mcp").join("auth.json")
+}
+
+/// Where nutrition-mcp (≤0.1) kept its login.
+pub fn legacy_path() -> PathBuf {
+    config_root().join("nutrition-mcp").join("auth.json")
+}
+
+fn config_root() -> PathBuf {
+    dirs::config_dir().unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Copy a nutrition-mcp login to the cook-mcp path once, so users upgrading
+/// through the npm shim stay logged in. Never overwrites an existing login.
+/// `fs::copy` keeps the 0600 mode `save` gave the original on unix.
+pub fn migrate_legacy(new: &Path, legacy: &Path) -> anyhow::Result<bool> {
+    if new.exists() || !legacy.exists() {
+        return Ok(false);
+    }
+    if let Some(dir) = new.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::copy(legacy, new)?;
+    Ok(true)
 }
 
 pub fn load(path: &Path) -> anyhow::Result<Option<StoredAuth>> {
@@ -167,5 +187,35 @@ mod tests {
         .unwrap();
         clear(&path).unwrap();
         assert!(load(&path).unwrap().is_none());
+    }
+
+    #[test]
+    fn migrate_copies_legacy_login_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("nutrition-mcp/auth.json");
+        let new = dir.path().join("cook-mcp/auth.json");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, r#"{"token":"t"}"#).unwrap();
+
+        assert!(migrate_legacy(&new, &legacy).unwrap());
+        assert_eq!(std::fs::read_to_string(&new).unwrap(), r#"{"token":"t"}"#);
+
+        std::fs::write(&legacy, r#"{"token":"newer"}"#).unwrap();
+        assert!(!migrate_legacy(&new, &legacy).unwrap(), "never overwrites an existing login");
+        assert_eq!(std::fs::read_to_string(&new).unwrap(), r#"{"token":"t"}"#);
+    }
+
+    #[test]
+    fn migrate_is_a_noop_without_legacy_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let new = dir.path().join("cook-mcp/auth.json");
+        assert!(!migrate_legacy(&new, &dir.path().join("missing.json")).unwrap());
+        assert!(!new.exists());
+    }
+
+    #[test]
+    fn default_path_is_cook_mcp() {
+        assert!(default_path().ends_with("cook-mcp/auth.json"));
+        assert!(legacy_path().ends_with("nutrition-mcp/auth.json"));
     }
 }

@@ -18,8 +18,18 @@ pub struct AuthManager {
 
 impl AuthManager {
     pub fn new(cfg: &Config) -> Self {
+        let path = match &cfg.auth_path {
+            Some(p) => p.clone(),
+            None => {
+                let path = store::default_path();
+                if let Err(e) = store::migrate_legacy(&path, &store::legacy_path()) {
+                    tracing::warn!("could not migrate nutrition-mcp login: {e:#}");
+                }
+                path
+            }
+        };
         Self {
-            path: cfg.auth_path.clone().unwrap_or_else(store::default_path),
+            path,
             cookmd_url: cfg.cookmd_url.clone(),
             token_override: cfg.token_override.clone(),
             cached: Mutex::new(None),
