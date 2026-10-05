@@ -1,0 +1,11 @@
+---
+servings: 2
+---
+
+==Monday==
+
+Breakfast: \
+- @./Breakfast/Pancakes{2%servings}
+
+Dinner: \
+- @./Dinner/Pasta{2%servings}

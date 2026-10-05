@@ -3,6 +3,8 @@ mod auth;
 mod config;
 mod render;
 mod server;
+mod test_support;
+mod workspace;
 
 use rmcp::{ServiceExt, transport::stdio};
 
