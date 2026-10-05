@@ -6,5 +6,6 @@
   "dependencies": { "@cookmd/mcp": "0.2.0" },
   "files": ["bin/"],
   "license": "MIT",
+  "repository": {"type": "git", "url": "git+https://github.com/cook-md/cook-mcp.git"},
   "engines": { "node": ">=18" }
 }

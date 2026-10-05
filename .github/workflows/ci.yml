@@ -15,3 +15,13 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check npm packages
+        run: |
+          node --check packaging/npm/install.js
+          node --check packaging/npm/bin/cook-mcp.js
+          node --check packaging/npm-shim/bin/nutrition-mcp.js
+          (cd packaging/npm && npm pack --dry-run)
+          (cd packaging/npm-shim && npm pack --dry-run)

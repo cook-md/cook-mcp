@@ -15,11 +15,25 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
+  preflight:
+    name: Check tag matches Cargo.toml
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $CARGO_VERSION" >&2
+            exit 1
+          fi
+
   build:
     name: Build (${{ matrix.target }})
+    needs: preflight
     strategy:
       matrix:
         include:
@@ -82,9 +96,15 @@ jobs:
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" \
                  --title "cook-mcp $GITHUB_REF_NAME" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" --clobber cook-mcp-*.tar.gz
+          
+      - name: Upload binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" --clobber cook-mcp-*.tar.gz
 
       - name: Write binary checksums into npm package
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           # install.js verifies the downloaded tarball against these SHA-256
           # sums, so a tampered or corrupted download is refused, including
@@ -95,6 +115,7 @@ jobs:
           done | jq -Rn '[inputs | split(" ") | {(.[0]): .[1]}] | add' \
             > packaging/npm/checksums.json
           cat packaging/npm/checksums.json
+          gh release upload "$GITHUB_REF_NAME" --clobber packaging/npm/checksums.json
 
       - uses: actions/setup-node@v4
         with:
@@ -103,12 +124,17 @@ jobs:
           # which breaks when no token env is set. OIDC needs neither.
           node-version: 24
 
+      - name: Update npm
+        run: npm i -g npm@latest
+
       - name: Publish @cookmd/mcp
         working-directory: packaging/npm
         run: |
           # tag v0.2.0 → npm version 0.2.0; install.js re-derives the
           # release URL as v${version}, closing the loop with the gh release.
           VERSION="${GITHUB_REF_NAME#v}"
+          npm view "@cookmd/mcp@$VERSION" version >/dev/null 2>&1 && { echo "already published"; exit 0; }
+          cp ../../README.md README.md
           npm version "$VERSION" --no-git-tag-version --allow-same-version
           npm publish --access public
 
@@ -116,5 +142,6 @@ jobs:
         working-directory: packaging/npm-shim
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          npm view "@cookmd/nutrition-mcp@$VERSION" version >/dev/null 2>&1 && { echo "already published"; exit 0; }
           npm pkg set version="$VERSION" dependencies.@cookmd/mcp="$VERSION"
           npm publish --access public

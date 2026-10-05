@@ -4,9 +4,9 @@
   "description": "MCP server for Cooklang recipes and cook.md: validate, plan, shop, pantry, reports, nutrition and import",
   "bin": { "cook-mcp": "bin/cook-mcp.js" },
   "scripts": { "postinstall": "node install.js" },
-  "files": ["bin/", "install.js", "checksums.json"],
+  "files": ["bin/", "install.js", "checksums.json", "README.md"],
   "license": "MIT",
-  "repository": "github:cook-md/cook-mcp",
+  "repository": {"type": "git", "url": "git+https://github.com/cook-md/cook-mcp.git"},
   "homepage": "https://cook.md/help/mcp",
   "engines": { "node": ">=18" }
 }

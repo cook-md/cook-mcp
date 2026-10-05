@@ -124,6 +124,8 @@ The binary is `target/release/cook-mcp`. It speaks MCP over stdio. `cook-mcp log
 
 `@cookmd/nutrition-mcp` keeps working: it is now a thin shim that runs `@cookmd/mcp`. To switch, change the package name in your MCP config to `@cookmd/mcp`. Your login carries over.
 
+Two things changed. Recipe tools need `COOK_RECIPES_DIR` (old configs did not set it), or start the client in your recipe folder; without either, recipe tools tell the agent that no recipe folder is set. And `render_report` paths are now relative to the recipe folder.
+
 ## License
 
 MIT
