@@ -96,8 +96,8 @@ it merges duplicates across recipes, groups by aisle and subtracts the pantry.
 
 ## Workflow: reuse or author -> render -> present
 
-1. Saved templates live under `reports/` in the collection: list them with
-   `list_recipes` `kind: "template"`. If one matches the request (read the name;
+1. Saved templates live in `reports/` (CookCLI) or `config/reports/` (Cook
+   Editor): `list_recipes` `kind: "template"` lists both. If one matches the request (read the name;
    ask the user when it isn't conclusive), render it with `template_path` and
    skip to step 4.
 2. Otherwise draft the template inline.
@@ -111,7 +111,9 @@ it merges duplicates across recipes, groups by aisle and subtracts the pantry.
 ## Saving a reusable template
 
 When the user wants to keep a report, save the template as a `.jinja` file:
-- Put templates under `reports/` (subfolders are fine).
+- Save it where the collection already keeps templates — `reports/` (CookCLI)
+  or `config/reports/` (Cook Editor), whichever `list_recipes`
+  `kind: "template"` shows in use; default `reports/`. Subfolders are fine.
 - Declare the output format via the inner extension:
   `weekly-cost.md.jinja` -> markdown, `menu.html.jinja` -> HTML,
   `shopping.txt.jinja` -> plain text.

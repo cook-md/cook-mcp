@@ -12,7 +12,7 @@ pub struct ListArgs {
     /// Folder to list, relative to the recipe root. Default: the whole collection.
     pub dir: Option<String>,
     /// "recipe" (.cook), "menu" (.menu), "all" (default: both), or "template" for the
-    /// .jinja report templates under reports/.
+    /// .jinja report templates under reports/ and config/reports/.
     pub kind: Option<String>,
 }
 
@@ -124,8 +124,9 @@ pub struct WriteArgs {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct WriteConfigArgs {
-    /// "config/aisle.conf", "config/pantry.conf", or a report template under
-    /// reports/ ending in .jinja, e.g. "reports/nutrition.md.jinja".
+    /// "config/aisle.conf", "config/pantry.conf", or a report template ending in
+    /// .jinja under reports/ (CookCLI) or config/reports/ (Cook Editor), e.g.
+    /// "reports/nutrition.md.jinja".
     pub path: String,
     /// Full file content.
     pub content: String,
@@ -168,13 +169,13 @@ impl CookMcp {
         }
         let mut files = Vec::new();
         let listed = if want == "template" {
-            // Templates live under reports/; a missing folder is just empty.
-            let reports = ws.root().join("reports");
-            if reports.is_dir() {
-                walk_ext(&reports, &["jinja"], &mut files)
-            } else {
-                Ok(())
-            }
+            // Templates live under reports/ and config/reports/; a missing
+            // folder is just empty.
+            crate::workspace::TEMPLATE_DIRS
+                .iter()
+                .map(|d| ws.root().join(d))
+                .filter(|d| d.is_dir())
+                .try_for_each(|d| walk_ext(&d, &["jinja"], &mut files))
         } else {
             walk(&dir, &mut files)
         };
@@ -479,7 +480,7 @@ impl CookMcp {
     #[tool(
         description = "Save config/aisle.conf (store aisles for shopping lists), \
         config/pantry.conf (pantry stock; creates it if missing) or a jinja report template \
-        under reports/ (path ending .jinja, rendered later with render_report template_path). \
+        under reports/ or config/reports/ (path ending .jinja, rendered later with render_report template_path). \
         Always the full file. Config problems come back as warnings in `diagnostics`; nothing is \
         refused for them. Not for Cooklang: use write_recipe / write_menu."
     )]
@@ -619,6 +620,9 @@ pub(crate) mod tests {
         std::fs::write(ws.root().join("reports/nutrition/week.md.jinja"), "x").unwrap();
         std::fs::write(ws.root().join("reports/notes.txt"), "x").unwrap();
         std::fs::write(ws.root().join("Dinner/stray.jinja"), "x").unwrap();
+        std::fs::create_dir_all(ws.root().join("config/reports")).unwrap();
+        std::fs::write(ws.root().join("config/reports/cost.md.jinja"), "x").unwrap();
+        std::fs::write(ws.root().join("config/stray.jinja"), "x").unwrap();
         let s = server(ws);
         let v = json(
             &s.list_recipes(Parameters(ListArgs {
@@ -630,7 +634,10 @@ pub(crate) mod tests {
         );
         assert_eq!(
             v["recipes"],
-            serde_json::json!([{ "path": "reports/nutrition/week.md.jinja", "kind": "template" }])
+            serde_json::json!([
+                { "path": "config/reports/cost.md.jinja", "kind": "template" },
+                { "path": "reports/nutrition/week.md.jinja", "kind": "template" }
+            ])
         );
         // The default listing stays Cooklang-only.
         let all = json(
@@ -674,6 +681,7 @@ pub(crate) mod tests {
             ("config/aisle.conf", "[produce]\nleek\n"),
             ("config/pantry.conf", "[fridge]\nmilk = \"1%l\"\n"),
             ("reports/cost.md.jinja", "{{ metadata.title }}"),
+            ("config/reports/cost.md.jinja", "{{ metadata.title }}"),
         ] {
             let r = write(path, content).await.unwrap();
             assert_ne!(r.is_error, Some(true), "{path}: {}", text_of(&r));

@@ -154,7 +154,8 @@ user will cook from.
 
 Offer (don't push) to save the targets as a reusable checks template so future
 edits can be re-validated (the nutrition-reports flow), at
-`reports/goals.<recipe-slug>.md.jinja`, with `write_config`:
+`reports/goals.<recipe-slug>.md.jinja` (or under `config/reports/` if that is
+where the collection keeps its templates — Cook Editor does), with `write_config`:
 
 ```jinja2
 {% import "ck" as ck %}

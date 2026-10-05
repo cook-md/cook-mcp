@@ -30,8 +30,8 @@ ingredient. `render_report` returns `{ rendered, checks, resolve_failures }`:
 ingredients the service couldn't resolve, each with an error code, message and
 `suggestions`.
 
-- **Reuse first:** saved templates live under `reports/`; list them with
-  `list_recipes` `kind: "template"`. If one answers the question, check its inline
+- **Reuse first:** saved templates live in `reports/` (CookCLI) or
+  `config/reports/` (Cook Editor); `list_recipes` `kind: "template"` lists both. If one answers the question, check its inline
   targets/exclusions match the user's, then render it with `template_path`. If the targets differ, author inline (or offer to update the saved
   template).
 - Otherwise draft inline (`template`) and iterate: read `rendered`, fix errors, repeat.
@@ -291,7 +291,8 @@ report once → ≤3-line summary.
 
 When the user wants to keep the report, save it as a `.jinja` file:
 
-- Put it under `reports/`.
+- Save it where the collection already keeps templates (`reports/` for CookCLI,
+  `config/reports/` for Cook Editor); default `reports/`.
 - Encode the output format in the inner extension: `nutrition.md.jinja` → markdown.
 - Save it with `write_config` (`path` e.g. `reports/nutrition.md.jinja`) and tell the
   user where.

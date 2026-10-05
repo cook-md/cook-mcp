@@ -109,7 +109,7 @@ returned; use paths exactly as tools return them; run validate before and after 
 is YAML frontmatter, never `>>` lines; write_recipe/write_menu save for real, so say what you saved. \
 Read cooklang://syntax before writing Cooklang; task guides are the cooklang://skills/* resources. \
 Free, no login: list_recipes, read_recipe, search_recipes, validate, write_recipe, write_menu, \
-shopping_list, pantry_*, write_config (aisle.conf, pantry.conf, reports/*.jinja), render_report \
+shopping_list, pantry_*, write_config (aisle.conf, pantry.conf, .jinja report templates), render_report \
 (plain templates), import_recipe from a web page or text. \
 Cook Basic/Pro (cook.md): nutrition tools, nutrition reports, photo and social imports. On \
 login_required call `login`; on plan_required show the user checkout_url.";

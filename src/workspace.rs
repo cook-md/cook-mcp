@@ -25,11 +25,11 @@ pub enum WorkspaceError {
     #[error("path `{path}` resolves outside the recipe root {root}")]
     Escapes { path: String, root: String },
     #[error(
-        "cannot write `{0}`: only .cook and .menu files, config/aisle.conf, config/pantry.conf and reports/**/*.jinja templates can be written"
+        "cannot write `{0}`: only .cook and .menu files, config/aisle.conf, config/pantry.conf and reports/**/*.jinja or config/reports/**/*.jinja templates can be written"
     )]
     Extension(String),
     #[error(
-        "write_config writes config/aisle.conf, config/pantry.conf or a report template under reports/ (*.jinja); `{0}` is none of those (use write_recipe / write_menu for Cooklang)"
+        "write_config writes config/aisle.conf, config/pantry.conf or a report template (*.jinja) under reports/ or config/reports/; `{0}` is none of those (use write_recipe / write_menu for Cooklang)"
     )]
     NotConfig(String),
     #[error(
@@ -146,10 +146,14 @@ enum Kind {
     Template,
 }
 
+/// Where report templates live: `reports/` (CookCLI) and `config/reports/`
+/// (Cook Editor).
+pub const TEMPLATE_DIRS: [&str; 2] = ["reports", "config/reports"];
+
 fn writable_kind(rel: &Utf8Path) -> Option<Kind> {
     match rel.extension() {
         Some("cook" | "menu") => Some(Kind::Cooklang),
-        Some("jinja") if rel.starts_with("reports") => Some(Kind::Template),
+        Some("jinja") if TEMPLATE_DIRS.iter().any(|d| rel.starts_with(d)) => Some(Kind::Template),
         _ if rel == "config/aisle.conf" => Some(Kind::Aisle),
         _ if rel == "config/pantry.conf" => Some(Kind::Pantry),
         _ => None,
@@ -441,10 +445,17 @@ mod tests {
             .unwrap();
         assert_eq!(r.status, "created");
         assert!(ws.root().join("reports/nutrition/week.md.jinja").exists());
+        // Cook Editor keeps its templates in config/reports/.
+        let r = ws
+            .write_config("config/reports/cost.md.jinja", "x")
+            .unwrap();
+        assert_eq!(r.path, "config/reports/cost.md.jinja");
         for bad in [
             "reports/x.txt",
             "other/x.jinja",
             "x.jinja",
+            "config/x.jinja",
+            "config/reports/x.txt",
             "Dinner/Pasta.cook",
         ] {
             assert!(
