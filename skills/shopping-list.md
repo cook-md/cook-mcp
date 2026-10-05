@@ -1,0 +1,40 @@
+---
+name: shopping-list
+description: Use when the user asks for a shopping or grocery list from recipes or a meal plan.
+---
+
+# Skill: shopping-list
+
+Use when the user asks for a shopping or grocery list from recipes or a meal plan.
+
+Use the `shopping_list` tool. It does the arithmetic: merges duplicate ingredients across recipes, follows recipe references (a .menu's recipes and their sub-recipes), groups items by aisle from `config/aisle.conf`, and subtracts what `config/pantry.conf` already holds. Never hand-sum quantities yourself — it is error-prone and drifts from what the user's apps compute.
+
+## Workflow
+
+1. Find the recipes or plans: `search_recipes` when the user names dishes, `list_recipes` (`kind: "menu"` for plans) to browse. Never reference a recipe that is not in the collection.
+2. Call `shopping_list` with `recipes`: paths exactly as those tools returned them. Append `:N` to scale one entry, e.g. `"Dinner/Pasta.cook:2"` for a double batch. A .menu plan is one entry; its own `{N%servings}` references already set the amounts.
+3. Pantry: by default items in stock are subtracted. Pass `ignore_pantry: true` when the user wants the full list (e.g. shopping for someone else's kitchen).
+4. Format: the default JSON is grouped by aisle — present it as a grouped checklist. Pass `format: "markdown"` when the user wants text to paste or print.
+5. Report `diagnostics` that matter: references that didn't resolve, ingredients that couldn't be merged because their units differ.
+
+## Aisle grouping
+
+Items not listed in `config/aisle.conf` are not grouped under a store aisle. `validate` reports ingredients missing from it. If the user wants store-ordered output, the file is a list of `[category]` sections; order of sections and items is significant — arrange to match the store layout. Define synonyms with `|`:
+
+```
+[produce]
+potatoes
+
+[dairy]
+milk
+butter
+
+[canned goods]
+tuna|chicken of the sea
+```
+
+cook-mcp has no tool that writes `config/aisle.conf`. Give the user the lines to add, or write the file with your client's own file tools if it has them.
+
+## Saved lists in Cook apps
+
+Cook apps keep a saved list in a hidden `.shopping-list` file at the collection root: recipe references (`./Mains/Carbonara{2}`, nested two spaces per level for menu → recipe → sub-recipe) plus free-hand items (`olive oil{4%l}`, `salt`), with `--` comments. Only author it if the user asks for a list that shows up in their app, and only with your client's file tools; cook-mcp does not write it. The app computes totals from it, so never put summed quantities there.

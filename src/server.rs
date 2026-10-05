@@ -46,8 +46,33 @@ impl ServerHandler for CookMcp {
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
+                .enable_resources()
                 .build(),
         )
         .with_instructions(crate::knowledge::INSTRUCTIONS)
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<ListResourcesResult, rmcp::ErrorData> {
+        Ok(ListResourcesResult::with_all_items(crate::knowledge::list()))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<ReadResourceResult, rmcp::ErrorData> {
+        match crate::knowledge::read(&request.uri) {
+            Some(text) => Ok(ReadResourceResult::new(vec![
+                ResourceContents::text(text, request.uri).with_mime_type("text/markdown"),
+            ])),
+            None => Err(rmcp::ErrorData::resource_not_found(
+                format!("unknown resource {}", request.uri),
+                None,
+            )),
+        }
     }
 }
