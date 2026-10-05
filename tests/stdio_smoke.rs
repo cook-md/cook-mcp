@@ -7,7 +7,7 @@ fn rpc(line: &serde_json::Value) -> String {
 
 #[test]
 fn initialize_and_list_tools_over_stdio() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_nutrition-mcp"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cook-mcp"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -97,7 +97,7 @@ fn initialize_and_list_tools_over_stdio() {
 
 #[test]
 fn unknown_subcommand_exits_2_with_usage() {
-    let out = Command::new(env!("CARGO_BIN_EXE_nutrition-mcp"))
+    let out = Command::new(env!("CARGO_BIN_EXE_cook-mcp"))
         .arg("badcmd")
         .stdin(Stdio::null())
         .output()

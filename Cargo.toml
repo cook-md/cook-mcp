@@ -1,26 +1,38 @@
 [package]
-name = "nutrition-mcp"
-version = "0.1.0"
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
+name = "cook-mcp"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+description = "MCP server for Cooklang recipes and cook.md: validate, plan, shop, pantry, reports, nutrition and import"
+repository = "https://github.com/cook-md/cook-mcp"
+homepage = "https://cook.md/help/mcp"
+publish = false
+
+[[bin]]
+name = "cook-mcp"
+path = "src/main.rs"
 
 [dependencies]
-rmcp.workspace = true
-tokio.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-reqwest.workspace = true
-anyhow.workspace = true
-thiserror.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-dirs.workspace = true
-base64.workspace = true
+rmcp = { version = "2.2", features = ["server", "transport-io"] }
+tokio = { version = "1.40", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dirs = "6"
+base64 = "0.22"
+camino = "1"
+tempfile = "3"
+# Pinned: 0.37.0 is the last cookcli-core on cooklang 0.18 / cooklang-reports 0.5,
+# the versions cooklang-reports-nutrition 0.1 is built against. Bump together.
+cookcli-core = "=0.37.0"
 cookmd-nutrition-client = "0.1"
 cooklang-reports-nutrition = "0.1"
-cooklang-reports.workspace = true
+cooklang-reports = "0.5"
 
 [dev-dependencies]
-wiremock.workspace = true
-tempfile.workspace = true
+wiremock = "0.6"
