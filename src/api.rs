@@ -125,21 +125,39 @@ impl ApiClient {
     /// nutrition and import the same way. The upstream body is kept under
     /// `upstream` (allowance counts, suggestions).
     fn gate(&self, status: u16, body: serde_json::Value) -> serde_json::Value {
-        let upstream_error = body
+        let reason = body
             .get("error")
+            .or_else(|| body.get("code"))
             .and_then(|e| e.as_str())
-            .unwrap_or_default();
+            .map(String::from);
+        let upstream_error = reason.as_deref().unwrap_or_default();
         let login = status == 401 || upstream_error == "social_import_requires_account";
         if login {
             return serde_json::json!({
                 "error": "login_required",
+                "reason": reason,
                 "hint": "Run the `login` tool (or set NUTRITION_API_TOKEN), then retry.",
+                "upstream": body,
+            });
+        }
+        if upstream_error == "import_allowance_exhausted" {
+            let checkout = body
+                .get("upgrade_url")
+                .and_then(|u| u.as_str())
+                .map(String::from)
+                .unwrap_or_else(|| self.cfg.pricing_url());
+            return serde_json::json!({
+                "error": "plan_required",
+                "reason": reason,
+                "checkout_url": checkout,
+                "hint": "Import allowance used up. Larger allowances are on cook.md/pricing (checkout_url), or write the Cooklang yourself.",
                 "upstream": body,
             });
         }
         if status == 402 || status == 403 {
             return serde_json::json!({
                 "error": "plan_required",
+                "reason": reason,
                 "required_plan": "basic",
                 "checkout_url": self.cfg.pricing_url(),
                 "hint": "This needs Cook Basic or Pro. Show the user checkout_url.",
@@ -261,6 +279,7 @@ mod tests {
         let b = body(api.get("/b", &[]).await.unwrap());
         assert_eq!(b["error"], "plan_required");
         assert_eq!(b["required_plan"], "basic");
+        assert_eq!(b["reason"], "subscription_required");
         assert!(
             b["checkout_url"]
                 .as_str()
@@ -270,9 +289,31 @@ mod tests {
         assert_eq!(b["upstream"]["code"], "subscription_required");
         let c = body(api.get("/c", &[]).await.unwrap());
         assert_eq!(c["error"], "plan_required");
+        assert_eq!(c["reason"], "import_allowance_exhausted");
+        assert!(c.get("required_plan").is_none());
+        assert!(c["checkout_url"].as_str().unwrap().contains("/pricing"));
+        assert!(c["hint"].as_str().unwrap().contains("allowance"));
         assert_eq!(c["upstream"]["allowance"]["limit"], 50);
         let d = body(api.get("/d", &[]).await.unwrap());
         assert_eq!(d["error"], "login_required");
+    }
+
+    #[tokio::test]
+    async fn allowance_exhausted_prefers_upstream_upgrade_url() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/e"))
+            .respond_with(ResponseTemplate::new(402).set_body_json(serde_json::json!({
+                "error": "import_allowance_exhausted",
+                "upgrade_url": "https://cook.md/upgrade-here"
+            })))
+            .mount(&mock)
+            .await;
+        let api = client_for(&mock.uri(), None);
+        let ApiOutcome::Err { body, .. } = api.get("/e", &[]).await.unwrap() else {
+            panic!()
+        };
+        assert_eq!(body["checkout_url"], "https://cook.md/upgrade-here");
     }
 
     #[tokio::test]

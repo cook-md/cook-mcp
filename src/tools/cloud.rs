@@ -135,6 +135,10 @@ pub struct ImportArgs {
     pub text: Option<String>,
 }
 
+const IMAGE_EXTS: [&str; 7] = ["jpg", "jpeg", "png", "webp", "heic", "heif", "gif"];
+const MAX_IMAGE_BYTES: u64 = 15 * 1024 * 1024;
+const MAX_TOTAL_IMAGE_BYTES: u64 = 40 * 1024 * 1024;
+
 const IMPORT_FALLBACK: &str = "If the user doesn't want to upgrade: read the source yourself, \
     write the recipe as Cooklang (YAML frontmatter, quantities inline in steps), check it with \
     `validate`, then save it with `write_recipe`.";
@@ -374,16 +378,24 @@ impl CookMcp {
                          (or set NUTRITION_API_TOKEN) then retry.",
                     );
                 }
+                if msg.contains("subscription required") {
+                    msg.push_str(&format!(
+                        "\nHint: nutrition data needs Cook Basic or Pro - see {}",
+                        self.cfg.pricing_url()
+                    ));
+                }
                 Ok(CallToolResult::error(vec![ContentBlock::text(msg)]))
             }
         }
     }
 
-    #[tool(description = "Log in to cook.md (required for nutrition tools \
-        unless NUTRITION_API_TOKEN is set). Returns a user_code and \
+    #[tool(
+        description = "Log in to cook.md. Needed for nutrition tools (Cook Basic \
+        or Pro) and photo/social imports; recipe tools work without it. Returns a user_code and \
         verification_uri — show BOTH to the user and tell them to open the URL \
         and enter the code. Approval is detected automatically in the \
-        background; verify with auth_status.")]
+        background; verify with auth_status."
+    )]
     async fn login(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         if self.cfg.token_override.is_some() {
             return Ok(CallToolResult::success(vec![ContentBlock::text(
@@ -452,12 +464,30 @@ impl CookMcp {
             (None, None, Some(text)) => ("/api/cookify/text", serde_json::json!({ "text": text })),
             (None, Some(paths), None) if !paths.is_empty() && paths.len() <= 10 => {
                 let mut images = Vec::with_capacity(paths.len());
+                let mut total: u64 = 0;
                 for p in &paths {
                     let full = match self.workspace.resolve(p) {
                         Ok(f) => f,
                         Err(e) => return Ok(super::workspace_err(e)),
                     };
-                    match std::fs::read(&full) {
+                    let ext = full.extension().unwrap_or_default().to_ascii_lowercase();
+                    if !IMAGE_EXTS.contains(&ext.as_str()) {
+                        return Ok(text_err(format!(
+                            "{p} is not an image (allowed: jpg, jpeg, png, webp, heic, heif, gif)"
+                        )));
+                    }
+                    let len = match tokio::fs::metadata(&full).await {
+                        Ok(m) => m.len(),
+                        Err(e) => return Ok(text_err(format!("cannot read {p}: {e}"))),
+                    };
+                    if len > MAX_IMAGE_BYTES {
+                        return Ok(text_err(format!("{p} is too large (max 15 MB per image)")));
+                    }
+                    total += len;
+                    if total > MAX_TOTAL_IMAGE_BYTES {
+                        return Ok(text_err("images are too large together (max 40 MB total)"));
+                    }
+                    match tokio::fs::read(&full).await {
                         Ok(bytes) => {
                             images.push(base64::engine::general_purpose::STANDARD.encode(bytes))
                         }
@@ -476,7 +506,12 @@ impl CookMcp {
             }
         };
         Ok(match self.api.cookmd_post(route, body).await {
-            Ok(ApiOutcome::Ok(mut v)) => {
+            Ok(ApiOutcome::Ok(v)) => {
+                let mut v = if v.is_object() {
+                    v
+                } else {
+                    serde_json::json!({ "result": v })
+                };
                 v["next_step"] = "Check the Cooklang with `validate` (pass it as `content`), \
                     merge `metadata` into YAML frontmatter, then save with `write_recipe`."
                     .into();
@@ -1078,6 +1113,7 @@ mod tests {
             .mount(&mock)
             .await;
         let (d, ws) = crate::test_support::fixture_workspace();
+        let before = names(d.path());
         let s = server_in(&mock.uri(), ws);
         let r = s
             .import_recipe(Parameters(ImportArgs {
@@ -1090,11 +1126,10 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&text_of(&r)).unwrap();
         assert_eq!(v["name"], "Leek Soup");
         assert!(v["next_step"].as_str().unwrap().contains("write_recipe"));
-        assert_eq!(
-            std::fs::read_dir(d.path()).unwrap().count(),
-            5,
-            "nothing new written to the root"
-        );
+        let after = names(d.path());
+        assert_eq!(before, after, "nothing new written to the root");
+        let req = &mock.received_requests().await.unwrap()[0];
+        assert!(req.headers.get("authorization").is_none());
     }
 
     #[tokio::test]
@@ -1141,5 +1176,124 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r.is_error, Some(true));
+    }
+
+    fn names(dir: &std::path::Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    }
+
+    async fn import_images_err(files: Vec<(&str, u64)>, paths: Vec<String>) -> String {
+        let (d, ws) = crate::test_support::fixture_workspace();
+        for (name, len) in files {
+            let f = std::fs::File::create(d.path().join(name)).unwrap();
+            f.set_len(len).unwrap();
+        }
+        let s = server_in("http://127.0.0.1:9", ws);
+        let r = s
+            .import_recipe(Parameters(ImportArgs {
+                url: None,
+                image_paths: Some(paths),
+                text: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        text_of(&r)
+    }
+
+    #[tokio::test]
+    async fn import_refuses_non_image_extension() {
+        let t = import_images_err(vec![(".env", 10)], vec![".env".into()]).await;
+        assert!(t.contains("not an image"), "{t}");
+    }
+
+    #[tokio::test]
+    async fn import_refuses_oversize_image() {
+        let t = import_images_err(vec![("big.JPG", 16 << 20)], vec!["big.JPG".into()]).await;
+        assert!(t.contains("too large"), "{t}");
+    }
+
+    #[tokio::test]
+    async fn import_refuses_oversize_total() {
+        let files: Vec<(&str, u64)> = vec![
+            ("a.png", 14 << 20),
+            ("b.png", 14 << 20),
+            ("c.png", 14 << 20),
+        ];
+        let t =
+            import_images_err(files, vec!["a.png".into(), "b.png".into(), "c.png".into()]).await;
+        assert!(t.contains("together"), "{t}");
+    }
+
+    #[tokio::test]
+    async fn import_refuses_more_than_ten_images() {
+        let paths: Vec<String> = (0..11).map(|i| format!("{i}.jpg")).collect();
+        let t = import_images_err(vec![], paths).await;
+        assert!(t.contains("exactly one"), "{t}");
+    }
+
+    #[tokio::test]
+    async fn import_refuses_image_outside_root() {
+        let t = import_images_err(vec![], vec!["../../etc/hosts.jpg".into()]).await;
+        assert!(!t.contains("/9j/") && !t.is_empty());
+    }
+
+    #[tokio::test]
+    async fn import_wraps_non_object_success() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/cookify/text"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!("plain")))
+            .mount(&mock)
+            .await;
+        let (_d, ws) = crate::test_support::fixture_workspace();
+        let s = server_in(&mock.uri(), ws);
+        let r = s
+            .import_recipe(Parameters(ImportArgs {
+                url: None,
+                image_paths: None,
+                text: Some("soup".into()),
+            }))
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text_of(&r)).unwrap();
+        assert_eq!(v["result"], "plain");
+        assert!(v["next_step"].is_string());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn render_report_subscription_required_adds_plan_hint() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/aggregate"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .set_body_json(serde_json::json!({"code": "subscription_required"})),
+            )
+            .mount(&mock)
+            .await;
+        let s = server_for(&mock.uri());
+        let r = s
+            .render_report(Parameters(RenderReportArgs {
+                template: Some("kcal: {{ total_calories(ingredients) }}".into()),
+                template_path: None,
+                input: Some("@salmon{150%g}".into()),
+                input_path: None,
+                kind: Some("cook".into()),
+                base_path: None,
+                scale: None,
+                client_profile_path: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let text = text_of(&r);
+        assert!(text.contains("Cook Basic or Pro"), "got: {text}");
+        assert!(text.contains("/pricing"), "got: {text}");
     }
 }
