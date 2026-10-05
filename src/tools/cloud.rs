@@ -106,21 +106,22 @@ pub struct ReferenceIntakesArgs {
 pub struct RenderReportArgs {
     /// Inline jinja template source. Provide exactly one of template | template_path.
     pub template: Option<String>,
-    /// Absolute path to a .jinja template file.
+    /// Path relative to the recipe root (absolute paths inside the root also work).
     pub template_path: Option<String>,
     /// Inline cooklang source (requires `kind`). Provide exactly one of input | input_path.
     pub input: Option<String>,
-    /// Absolute path to a .cook recipe or .menu plan (kind inferred from extension).
+    /// Path relative to the recipe root (absolute paths inside the root also work); a .cook
+    /// recipe or .menu plan (kind inferred from extension).
     pub input_path: Option<String>,
     /// "cook" or "menu" — required with inline `input`.
     pub kind: Option<String>,
-    /// Absolute path to the recipe-directory root, used to resolve `@./` recipe
-    /// references in .menu plans; defaults to the input file's parent directory.
+    /// Folder that `@./` references resolve from; default: the recipe root.
     pub base_path: Option<String>,
     /// Recipe scaling factor. NOTE: scales .cook recipes only — .menu plan
     /// quantities are not scaled.
     pub scale: Option<f64>,
-    /// Absolute path to a client profile YAML (dietary targets for checks).
+    /// Path relative to the recipe root (absolute paths inside the root also work); a client
+    /// profile YAML (dietary targets for checks).
     pub client_profile_path: Option<String>,
 }
 
@@ -275,7 +276,7 @@ impl CookMcp {
         .cook recipe or .menu plan. Returns {rendered, checks, \
         resolve_failures}. Iterate: fix the template or recipe using \
         resolve_failures[].error (code/message/suggestions), re-render until \
-        clean. Paths must be absolute. Scaling applies to .cook recipes only, \
+        clean. Paths are relative to the recipe root. Templates that don't call nutrition functions work without a login; nutrition data needs Cook Basic or Pro. Scaling applies to .cook recipes only, \
         not .menu quantities. Companion tools: lookup_ingredient for name \
         misses, convert_units for unit/density issues.")]
     async fn render_report(
@@ -283,23 +284,38 @@ impl CookMcp {
         Parameters(a): Parameters<RenderReportArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         use crate::render::{InputKind, RenderRequest, Source};
+        let ws = &self.workspace;
+        let resolve = |p: String| ws.resolve(&p).map(|full| full.into_std_path_buf());
         let template = match (a.template, a.template_path) {
             (Some(t), None) => Source::Inline(t),
-            (None, Some(p)) => Source::Path(p.into()),
+            (None, Some(p)) => match resolve(p) {
+                Ok(full) => Source::Path(full),
+                Err(e) => return Ok(super::workspace_err(e)),
+            },
             _ => {
-                return Ok(CallToolResult::error(vec![ContentBlock::text(
+                return Ok(text_err(
                     "provide exactly one of `template` or `template_path`",
-                )]));
+                ));
             }
         };
         let input = match (a.input, a.input_path) {
             (Some(t), None) => Source::Inline(t),
-            (None, Some(p)) => Source::Path(p.into()),
-            _ => {
-                return Ok(CallToolResult::error(vec![ContentBlock::text(
-                    "provide exactly one of `input` or `input_path`",
-                )]));
-            }
+            (None, Some(p)) => match resolve(p) {
+                Ok(full) => Source::Path(full),
+                Err(e) => return Ok(super::workspace_err(e)),
+            },
+            _ => return Ok(text_err("provide exactly one of `input` or `input_path`")),
+        };
+        let base_path = match a.base_path {
+            Some(p) => match resolve(p) {
+                Ok(full) => full,
+                Err(e) => return Ok(super::workspace_err(e)),
+            },
+            None => ws.root().as_std_path().to_path_buf(),
+        };
+        let client_profile_path = match a.client_profile_path.map(resolve).transpose() {
+            Ok(p) => p,
+            Err(e) => return Ok(super::workspace_err(e)),
         };
         let kind = match a.kind.as_deref() {
             Some("cook") => Some(InputKind::Cook),
@@ -315,9 +331,9 @@ impl CookMcp {
             template,
             input,
             kind,
-            base_path: a.base_path.map(Into::into),
+            base_path: Some(base_path),
             scale: a.scale,
-            client_profile_path: a.client_profile_path.map(Into::into),
+            client_profile_path,
         };
         let api_url = self.cfg.api_url.clone();
         let bearer = self.auth.bearer().await;
@@ -911,5 +927,53 @@ mod tests {
         let text = text_of(&r);
         assert!(text.contains("authentication required"), "got: {text}");
         assert!(text.contains("login"), "got: {text}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn render_report_plain_template_needs_no_login_and_accepts_relative_paths() {
+        let (_d, ws) = crate::test_support::fixture_workspace();
+        let dir = tempfile::tempdir().unwrap();
+        let auth = dir.keep().join("auth.json");
+        let cfg = crate::config::Config::from_vars(|k| match k {
+            "NUTRITION_API_URL" | "COOKMD_BASE_URL" => Some("http://127.0.0.1:9".into()),
+            "COOK_MCP_AUTH_PATH" => Some(auth.to_string_lossy().into_owned()),
+            _ => None,
+        });
+        let s = CookMcp::new(cfg, ws);
+        let r = s
+            .render_report(Parameters(RenderReportArgs {
+                template: Some("{% for i in ingredients %}{{ i.name }}\n{% endfor %}".into()),
+                template_path: None,
+                input: None,
+                input_path: Some("Breakfast/Pancakes.cook".into()),
+                kind: None,
+                base_path: None,
+                scale: None,
+                client_profile_path: None,
+            }))
+            .await
+            .unwrap();
+        assert_ne!(r.is_error, Some(true), "{}", text_of(&r));
+        assert!(text_of(&r).contains("flour"));
+    }
+
+    #[tokio::test]
+    async fn render_report_refuses_paths_outside_root() {
+        let (_d, ws) = crate::test_support::fixture_workspace();
+        let s = CookMcp::new(crate::config::Config::from_vars(|_| None), ws);
+        let r = s
+            .render_report(Parameters(RenderReportArgs {
+                template: Some("x".into()),
+                template_path: None,
+                input: None,
+                input_path: Some("../../etc/hosts".into()),
+                kind: None,
+                base_path: None,
+                scale: None,
+                client_profile_path: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
     }
 }
