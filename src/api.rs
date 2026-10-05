@@ -76,6 +76,23 @@ impl ApiClient {
         self.finish(req, Target::Cookmd).await
     }
 
+    /// POST against the cook.md web app (cookify import).
+    pub async fn cookmd_post(
+        &self,
+        route: &str,
+        body: serde_json::Value,
+    ) -> anyhow::Result<ApiOutcome> {
+        let mut req = self
+            .http
+            .post(format!("{}{}", self.cfg.cookmd_url, route))
+            .timeout(std::time::Duration::from_secs(120))
+            .json(&body);
+        if let Some(tok) = self.auth.bearer().await {
+            req = req.bearer_auth(tok);
+        }
+        self.finish(req, Target::Cookmd).await
+    }
+
     async fn finish(
         &self,
         req: reqwest::RequestBuilder,
@@ -93,34 +110,43 @@ impl ApiClient {
         // Preserve non-JSON bodies (e.g. an HTML 502 from a reverse proxy)
         // verbatim instead of narrowing them to null; the wrapper object also
         // lets the 401/403 decoration below still attach.
-        let mut body: serde_json::Value =
+        let body: serde_json::Value =
             serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({ "raw_body": text }));
         if (200..300).contains(&status) {
             return Ok(ApiOutcome::Ok(body));
         }
-        if let Some(obj) = body.as_object_mut() {
-            match status {
-                401 => {
-                    obj.insert(
-                        "hint".into(),
-                        "Not authenticated. Run the `login` tool (or set NUTRITION_API_TOKEN) \
-                         then retry."
-                            .into(),
-                    );
-                }
-                403 => {
-                    obj.insert("checkout_url".into(), self.cfg.pricing_url().into());
-                    obj.insert(
-                        "hint".into(),
-                        "Authenticated but no active Cook Pro subscription. \
-                         Open checkout_url in a browser to subscribe."
-                            .into(),
-                    );
-                }
-                _ => {}
-            }
+        Ok(ApiOutcome::Err {
+            status,
+            body: self.gate(status, body),
+        })
+    }
+
+    /// One shape for every "you can't do this yet" answer, so agents handle
+    /// nutrition and import the same way. The upstream body is kept under
+    /// `upstream` (allowance counts, suggestions).
+    fn gate(&self, status: u16, body: serde_json::Value) -> serde_json::Value {
+        let upstream_error = body
+            .get("error")
+            .and_then(|e| e.as_str())
+            .unwrap_or_default();
+        let login = status == 401 || upstream_error == "social_import_requires_account";
+        if login {
+            return serde_json::json!({
+                "error": "login_required",
+                "hint": "Run the `login` tool (or set NUTRITION_API_TOKEN), then retry.",
+                "upstream": body,
+            });
         }
-        Ok(ApiOutcome::Err { status, body })
+        if status == 402 || status == 403 {
+            return serde_json::json!({
+                "error": "plan_required",
+                "required_plan": "basic",
+                "checkout_url": self.cfg.pricing_url(),
+                "hint": "This needs Cook Basic or Pro. Show the user checkout_url.",
+                "upstream": body,
+            });
+        }
+        body
     }
 }
 
@@ -190,34 +216,63 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unauth_gets_login_hint_and_forbidden_gets_checkout() {
+    async fn gating_statuses_map_to_structured_errors() {
         let mock = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/nutrition"))
+            .and(path("/a"))
             .respond_with(
                 ResponseTemplate::new(401)
-                    .set_body_json(serde_json::json!({"code": "unauthorized"})),
+                    .set_body_json(serde_json::json!({"errors": ["Authentication Failed"]})),
             )
-            .up_to_n_times(1)
             .mount(&mock)
             .await;
         Mock::given(method("GET"))
-            .and(path("/nutrition"))
+            .and(path("/b"))
             .respond_with(
                 ResponseTemplate::new(403)
                     .set_body_json(serde_json::json!({"code": "subscription_required"})),
             )
             .mount(&mock)
             .await;
+        Mock::given(method("GET"))
+            .and(path("/c"))
+            .respond_with(ResponseTemplate::new(402).set_body_json(serde_json::json!({
+                "error": "import_allowance_exhausted",
+                "allowance": {"used": 50, "limit": 50}
+            })))
+            .mount(&mock)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/d"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .set_body_json(serde_json::json!({"error": "social_import_requires_account"})),
+            )
+            .mount(&mock)
+            .await;
         let api = client_for(&mock.uri(), None);
-        let ApiOutcome::Err { body, .. } = api.get("/nutrition", &[]).await.unwrap() else {
-            panic!()
+        let body = |o: ApiOutcome| match o {
+            ApiOutcome::Err { body, .. } => body,
+            _ => panic!(),
         };
-        assert!(body["hint"].as_str().unwrap().contains("login"));
-        let ApiOutcome::Err { body, .. } = api.get("/nutrition", &[]).await.unwrap() else {
-            panic!()
-        };
-        assert!(body["checkout_url"].as_str().unwrap().contains("/pricing"));
+
+        let a = body(api.get("/a", &[]).await.unwrap());
+        assert_eq!(a["error"], "login_required");
+        let b = body(api.get("/b", &[]).await.unwrap());
+        assert_eq!(b["error"], "plan_required");
+        assert_eq!(b["required_plan"], "basic");
+        assert!(
+            b["checkout_url"]
+                .as_str()
+                .unwrap()
+                .ends_with("/pricing?utm_source=cook-mcp")
+        );
+        assert_eq!(b["upstream"]["code"], "subscription_required");
+        let c = body(api.get("/c", &[]).await.unwrap());
+        assert_eq!(c["error"], "plan_required");
+        assert_eq!(c["upstream"]["allowance"]["limit"], 50);
+        let d = body(api.get("/d", &[]).await.unwrap());
+        assert_eq!(d["error"], "login_required");
     }
 
     #[tokio::test]
@@ -234,7 +289,7 @@ mod tests {
         };
         assert_eq!(status, 401);
         assert!(
-            body["raw_body"]
+            body["upstream"]["raw_body"]
                 .as_str()
                 .unwrap()
                 .contains("<html>auth wall</html>")

@@ -125,6 +125,20 @@ pub struct RenderReportArgs {
     pub client_profile_path: Option<String>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ImportArgs {
+    /// Recipe web page (http/https). Provide exactly one of url | image_paths | text.
+    pub url: Option<String>,
+    /// Photos of a recipe (cookbook page, card), as paths inside the recipe root. Max 10.
+    pub image_paths: Option<Vec<String>>,
+    /// Recipe text the user pasted.
+    pub text: Option<String>,
+}
+
+const IMPORT_FALLBACK: &str = "If the user doesn't want to upgrade: read the source yourself, \
+    write the recipe as Cooklang (YAML frontmatter, quantities inline in steps), check it with \
+    `validate`, then save it with `write_recipe`.";
+
 #[tool_router(router = cloud_router, vis = "pub(crate)")]
 impl CookMcp {
     #[tool(description = "Nutrition facts for one ingredient amount (macros, \
@@ -422,13 +436,69 @@ impl CookMcp {
         )]))
     }
 
-    #[tool(description = "Report login + Cook Pro subscription status.")]
+    #[tool(
+        description = "Convert a recipe web page, photos, or pasted text to Cooklang with \
+        cook.md. Returns the Cooklang text; it does NOT save it. Next: check it with `validate`, \
+        then `write_recipe` to a path the user agrees to. Web pages and text work without a login; \
+        photos and social-media links need a cook.md account and use the import allowance."
+    )]
+    async fn import_recipe(
+        &self,
+        Parameters(a): Parameters<ImportArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        use base64::Engine as _;
+        let (route, body) = match (a.url, a.image_paths, a.text) {
+            (Some(url), None, None) => ("/api/cookify/url", serde_json::json!({ "url": url })),
+            (None, None, Some(text)) => ("/api/cookify/text", serde_json::json!({ "text": text })),
+            (None, Some(paths), None) if !paths.is_empty() && paths.len() <= 10 => {
+                let mut images = Vec::with_capacity(paths.len());
+                for p in &paths {
+                    let full = match self.workspace.resolve(p) {
+                        Ok(f) => f,
+                        Err(e) => return Ok(super::workspace_err(e)),
+                    };
+                    match std::fs::read(&full) {
+                        Ok(bytes) => {
+                            images.push(base64::engine::general_purpose::STANDARD.encode(bytes))
+                        }
+                        Err(e) => return Ok(text_err(format!("cannot read {p}: {e}"))),
+                    }
+                }
+                (
+                    "/api/cookify/images",
+                    serde_json::json!({ "images": images }),
+                )
+            }
+            _ => {
+                return Ok(text_err(
+                    "provide exactly one of `url`, `image_paths` (1-10) or `text`",
+                ));
+            }
+        };
+        Ok(match self.api.cookmd_post(route, body).await {
+            Ok(ApiOutcome::Ok(mut v)) => {
+                v["next_step"] = "Check the Cooklang with `validate` (pass it as `content`), \
+                    merge `metadata` into YAML frontmatter, then save with `write_recipe`."
+                    .into();
+                json_ok(&v)
+            }
+            Ok(ApiOutcome::Err { mut body, .. }) => {
+                if body["error"] == "plan_required" || body["error"] == "login_required" {
+                    body["next_step"] = IMPORT_FALLBACK.into();
+                }
+                json_err(&body)
+            }
+            Err(e) => text_err(e.to_string()),
+        })
+    }
+
+    #[tool(description = "Report login status, Cook plan and import allowance.")]
     async fn auth_status(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         let mut status = serde_json::json!({});
         let mut probe_subscription = false;
         let authenticated = if self.cfg.token_override.is_some() {
             status["via"] = "NUTRITION_API_TOKEN".into();
-            // Org API keys aren't cook.md JWTs — probing /api/subscription
+            // Org API keys aren't cook.md JWTs — probing /api/entitlements
             // with one always yields a confusing 401, so don't.
             status["subscription"] = "not_applicable (org API key)".into();
             true
@@ -444,17 +514,22 @@ impl CookMcp {
         };
         status["authenticated"] = authenticated.into();
         if probe_subscription {
-            match self.api.cookmd_get("/api/subscription").await {
-                Ok(ApiOutcome::Ok(body)) => status["subscription"] = body,
+            match self.api.cookmd_get("/api/entitlements").await {
+                Ok(ApiOutcome::Ok(body)) => {
+                    status["plan"] = body["plan"].clone();
+                    status["usage"] = body["usage"].clone();
+                    status["features"] = body["features"].clone();
+                }
                 Ok(ApiOutcome::Err { status: code, body }) => {
-                    status["subscription_error"] =
+                    status["entitlements_error"] =
                         serde_json::json!({ "status": code, "body": body });
                 }
-                Err(e) => status["subscription_error"] = e.to_string().into(),
+                Err(e) => status["entitlements_error"] = e.to_string().into(),
             }
         } else if !authenticated {
             status["hint"] = "Run the `login` tool, or set NUTRITION_API_TOKEN.".into();
         }
+        status["free_tools"] = "Recipe tools (list, read, search, validate, write, shopping list, pantry, plain reports) work without a login.".into();
         Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string_pretty(&status).unwrap_or_default(),
         )]))
@@ -867,10 +942,10 @@ mod tests {
     async fn auth_status_reports_subscription_for_stored_login() {
         let mock = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/api/subscription"))
+            .and(path("/api/entitlements"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "has_access": true, "plan_slug": "pro_early_adopter_v1",
-                "email": "a@b.c"})))
+                "plan": {"slug": "basic_v1", "name": "Cook Basic", "tier": "basic"},
+                "usage": {"photo_import": {"used": 3, "limit": 50}}})))
             .mount(&mock)
             .await;
         let s = server_for(&mock.uri());
@@ -880,13 +955,14 @@ mod tests {
         assert_eq!(v["authenticated"], true);
         assert_eq!(v["via"], "cook.md login");
         assert_eq!(v["email"], "a@b.c");
-        assert_eq!(v["subscription"]["has_access"], true);
+        assert_eq!(v["plan"]["tier"], "basic");
+        assert_eq!(v["usage"]["photo_import"]["used"], 3);
     }
 
     #[tokio::test]
     async fn auth_status_org_key_skips_subscription_probe() {
-        // No /api/subscription mock mounted: if the tool probed cook.md it
-        // would surface a subscription_error — org keys must skip the probe.
+        // No /api/entitlements mock mounted: if the tool probed cook.md it
+        // would surface an entitlements_error — org keys must skip the probe.
         let mock = MockServer::start().await;
         let s = server_for_with_token(&mock.uri(), "org-key");
         let r = s.auth_status().await.unwrap();
@@ -895,7 +971,7 @@ mod tests {
         assert_eq!(v["via"], "NUTRITION_API_TOKEN");
         assert_eq!(v["subscription"], "not_applicable (org API key)");
         assert!(
-            v.get("subscription_error").is_none(),
+            v.get("entitlements_error").is_none(),
             "probe should be skipped, got: {v}"
         );
     }
@@ -971,6 +1047,96 @@ mod tests {
                 base_path: None,
                 scale: None,
                 client_profile_path: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+    }
+
+    fn server_in(mock_uri: &str, ws: crate::workspace::Workspace) -> CookMcp {
+        let dir = tempfile::tempdir().unwrap();
+        let auth_path = dir.keep().join("auth.json");
+        let cfg = crate::config::Config::from_vars(|k| match k {
+            "NUTRITION_API_URL" | "COOKMD_BASE_URL" => Some(mock_uri.to_string()),
+            "COOK_MCP_AUTH_PATH" => Some(auth_path.to_string_lossy().into_owned()),
+            _ => None,
+        });
+        CookMcp::new(cfg, ws)
+    }
+
+    #[tokio::test]
+    async fn import_url_posts_to_cookify_and_does_not_write() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/cookify/url"))
+            .and(wiremock::matchers::body_json(
+                serde_json::json!({"url": "https://example.com/soup"}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "cooklang": "Simmer @leeks{3}.", "name": "Leek Soup", "metadata": {"servings": "4"}
+            })))
+            .mount(&mock)
+            .await;
+        let (d, ws) = crate::test_support::fixture_workspace();
+        let s = server_in(&mock.uri(), ws);
+        let r = s
+            .import_recipe(Parameters(ImportArgs {
+                url: Some("https://example.com/soup".into()),
+                image_paths: None,
+                text: None,
+            }))
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text_of(&r)).unwrap();
+        assert_eq!(v["name"], "Leek Soup");
+        assert!(v["next_step"].as_str().unwrap().contains("write_recipe"));
+        assert_eq!(
+            std::fs::read_dir(d.path()).unwrap().count(),
+            5,
+            "nothing new written to the root"
+        );
+    }
+
+    #[tokio::test]
+    async fn import_images_sends_base64_and_maps_402() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/cookify/images"))
+            .respond_with(
+                ResponseTemplate::new(402)
+                    .set_body_json(serde_json::json!({"error": "import_allowance_exhausted"})),
+            )
+            .mount(&mock)
+            .await;
+        let (d, ws) = crate::test_support::fixture_workspace();
+        std::fs::write(d.path().join("page.jpg"), [0xFFu8, 0xD8, 0xFF]).unwrap();
+        let s = server_in(&mock.uri(), ws);
+        let r = s
+            .import_recipe(Parameters(ImportArgs {
+                url: None,
+                image_paths: Some(vec!["page.jpg".into()]),
+                text: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let v: serde_json::Value = serde_json::from_str(&text_of(&r)).unwrap();
+        assert_eq!(v["error"], "plan_required");
+        assert!(v["next_step"].as_str().unwrap().contains("validate"));
+        let sent = &mock.received_requests().await.unwrap()[0];
+        let body: serde_json::Value = serde_json::from_slice(&sent.body).unwrap();
+        assert_eq!(body["images"][0], "/9j/");
+    }
+
+    #[tokio::test]
+    async fn import_requires_exactly_one_source() {
+        let (_d, ws) = crate::test_support::fixture_workspace();
+        let s = server_in("http://127.0.0.1:9", ws);
+        let r = s
+            .import_recipe(Parameters(ImportArgs {
+                url: None,
+                image_paths: None,
+                text: None,
             }))
             .await
             .unwrap();
