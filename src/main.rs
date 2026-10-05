@@ -1,9 +1,11 @@
 mod api;
 mod auth;
 mod config;
+mod knowledge;
 mod render;
 mod server;
 mod test_support;
+mod tools;
 mod workspace;
 
 use rmcp::{ServiceExt, transport::stdio};
@@ -16,7 +18,9 @@ async fn main() -> anyhow::Result<()> {
     let cfg = config::Config::from_env();
     match std::env::args().nth(1).as_deref() {
         None | Some("serve") => {
-            let service = server::NutritionMcp::new(cfg).serve(stdio()).await?;
+            let workspace = workspace::Workspace::from_config(&cfg)?;
+            tracing::info!("recipe root: {}", workspace.root());
+            let service = server::CookMcp::new(cfg, workspace).serve(stdio()).await?;
             service.waiting().await?;
         }
         Some("login") => {
@@ -50,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("Logged out.");
         }
         Some(other) => {
-            eprintln!("usage: nutrition-mcp [serve|login|logout]  (unknown: {other})");
+            eprintln!("usage: cook-mcp [serve|login|logout]  (unknown: {other})");
             std::process::exit(2);
         }
     }
