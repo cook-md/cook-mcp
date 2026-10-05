@@ -8,6 +8,11 @@ fn rpc(line: &serde_json::Value) -> String {
 #[test]
 fn initialize_and_list_tools_over_stdio() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_cook-mcp"))
+        .env(
+            "COOK_RECIPES_DIR",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/workspace"),
+        )
+        .env("COOK_MCP_AUTH_PATH", "/nonexistent/auth.json")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -55,6 +60,19 @@ fn initialize_and_list_tools_over_stdio() {
         .map(|t| t["name"].as_str().unwrap())
         .collect();
     for expected in [
+        "list_recipes",
+        "read_recipe",
+        "search_recipes",
+        "validate",
+        "write_recipe",
+        "write_menu",
+        "write_config",
+        "shopping_list",
+        "pantry_list",
+        "pantry_expiring",
+        "pantry_depleted",
+        "pantry_recipes",
+        "pantry_update",
         "get_nutrition",
         "aggregate_nutrition",
         "lookup_ingredient",
@@ -63,6 +81,7 @@ fn initialize_and_list_tools_over_stdio() {
         "branded_lookup",
         "reference_intakes",
         "render_report",
+        "import_recipe",
         "login",
         "auth_status",
     ] {
@@ -87,9 +106,55 @@ fn initialize_and_list_tools_over_stdio() {
         .iter()
         .map(|p| p["name"].as_str().unwrap())
         .collect();
-    for expected in ["nutrition-report", "meal-planning", "nutrition-goals"] {
+    for expected in [
+        "meal-planning",
+        "shopping-list",
+        "pantry",
+        "import-recipe",
+        "edit-recipe",
+        "nutrition-report",
+        "nutrition-goals",
+    ] {
         assert!(prompts.contains(&expected), "prompts were: {prompts:?}");
     }
+
+    writeln!(
+        stdin,
+        "{}",
+        rpc(&serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "resources/list"}))
+    )
+    .unwrap();
+    let resp: serde_json::Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    let uris: Vec<&str> = resp["result"]["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["uri"].as_str().unwrap())
+        .collect();
+    for expected in [
+        "cooklang://spec",
+        "cooklang://syntax",
+        "cooklang://menu-format",
+        "cooklang://skills/meal-planning",
+    ] {
+        assert!(uris.contains(&expected), "resources were: {uris:?}");
+    }
+
+    writeln!(
+        stdin,
+        "{}",
+        rpc(&serde_json::json!({
+            "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+            "params": {"name": "validate", "arguments": {}}
+        }))
+    )
+    .unwrap();
+    let resp: serde_json::Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("\"total_recipes\": 4"),
+        "validate over fixture: {text}"
+    );
 
     drop(stdin);
     let _ = child.wait();
@@ -104,5 +169,5 @@ fn unknown_subcommand_exits_2_with_usage() {
         .expect("run binary");
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("usage:"), "stderr was: {stderr}");
+    assert!(stderr.contains("usage: cook-mcp"), "stderr was: {stderr}");
 }
