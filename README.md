@@ -1,0 +1,129 @@
+# cook-mcp
+
+An MCP server that gives your AI agent (Claude Code, Claude Desktop, Cursor, ChatGPT, or any other MCP client) access to your Cooklang recipe collection. Recipes stay as plain `.cook` and `.menu` files in a folder you own. The agent can read, search, validate and write them, build shopping lists, track a pantry and render reports, all locally and without an account. With a cook.md login it can also compute nutrition and import recipes from photos and social links.
+
+## Install
+
+Claude Code:
+
+```sh
+claude mcp add cook -- npx -y @cookmd/mcp
+```
+
+Any client that takes an `mcpServers` config:
+
+```json
+{
+  "mcpServers": {
+    "cook": {
+      "command": "npx",
+      "args": ["-y", "@cookmd/mcp"],
+      "env": { "COOK_RECIPES_DIR": "/path/to/recipes" }
+    }
+  }
+}
+```
+
+If `COOK_RECIPES_DIR` is not set, the client's working directory is the recipe root.
+
+Supported platforms: macOS (arm64, x64) and Linux (x64, arm64, glibc 2.35 or newer). There are no Windows builds yet.
+
+Setup notes for specific clients: https://cook.md/help/mcp
+
+## Tools
+
+### Free (local, no login)
+
+| Tool | What it does |
+|------|--------------|
+| `list_recipes` | List recipes, meal plans or report templates (`kind`: recipe, menu, template, all) |
+| `read_recipe` | Read a recipe or menu: source plus parsed ingredients, cookware, steps and metadata; optional scaling |
+| `search_recipes` | Search names and contents, optionally filtered by tag |
+| `validate` | Check a file, a folder, the whole collection, or unsaved content for errors and broken references |
+| `write_recipe` | Save a `.cook` recipe (validated first) |
+| `write_menu` | Save a `.menu` meal plan (validated first) |
+| `write_config` | Save `config/aisle.conf`, `config/pantry.conf`, or a `.jinja` report template under `reports/` or `config/reports/` |
+| `shopping_list` | Build a shopping list from recipes and/or menus: merges duplicates, groups by aisle, subtracts the pantry |
+| `pantry_list` | Show the pantry, by section |
+| `pantry_expiring` | Items expiring soon |
+| `pantry_depleted` | Items at or below their low-stock threshold |
+| `pantry_recipes` | Which recipes you can cook with what is in the pantry |
+| `pantry_update` | Add, update or remove pantry items |
+| `render_report` | Render a jinja report template against a recipe or menu (plain templates need no login) |
+
+### Cook Basic / Pro (cook.md login)
+
+| Tool | What it does |
+|------|--------------|
+| `login` | Start a cook.md device login; shows a code and a URL |
+| `auth_status` | Show login status, plan and import allowance |
+| `get_nutrition` | Nutrition facts for one ingredient amount |
+| `aggregate_nutrition` | Sum nutrition across many ingredient lines |
+| `lookup_ingredient` | Fuzzy-search the ingredient catalog |
+| `convert_units` | Convert between units (volume to mass needs a density) |
+| `check_category` | Check whether an ingredient belongs to a category |
+| `branded_lookup` | Look up a packaged product by barcode or text |
+| `reference_intakes` | Daily reference-intake tables (RDA/DV) |
+| `import_recipe` | Convert a web page, photos or pasted text to Cooklang |
+
+`import_recipe` from a web page or pasted text works without a login. Photos and social-media links need a cook.md account and use your import allowance. It returns Cooklang text and does not save it; the agent validates it and calls `write_recipe`. Nutrition functions inside `render_report` also need Cook Basic or Pro.
+
+## Prompts and resources
+
+Prompts: `meal-planning`, `shopping-list`, `pantry`, `import-recipe`, `edit-recipe`, `nutrition-report`, `nutrition-goals`.
+
+Resources:
+
+- `cooklang://spec`: the Cooklang specification
+- `cooklang://syntax`: a syntax reference
+- `cooklang://menu-format`: the `.menu` meal plan format
+- `cooklang://skills/<name>`: working guides for the agent: `cooklang-editing`, `cooklang-validation`, `meal-planning`, `metadata`, `nutrition-goals`, `nutrition-reports`, `pantry`, `recipe-import`, `report-authoring`, `shopping-list`
+
+## Safety
+
+- Writes stay inside the recipe root. Paths outside it are refused.
+- Every write is validated first; invalid Cooklang is not saved.
+- The deprecated `>>` metadata syntax is refused. Use YAML frontmatter.
+- There is no delete tool. The agent cannot remove your files.
+
+## Known limitations
+
+- Pantry subtraction in shopping lists only works when units match. For example, 1 kg in the pantry does not cancel 200 g in a recipe. This is a limitation of cookcli-core.
+- Symlinks inside the recipe folder are mostly not followed for reads and listing. A symlink requested by bare name without an extension, or reached through a recipe's `@./` reference, may still be followed. This only matters if you put symlinks pointing outside the folder into your recipes.
+- No Windows builds yet.
+- No delete tool.
+
+## Environment variables
+
+| Var | Default | Meaning |
+|-----|---------|---------|
+| `COOK_RECIPES_DIR` | the client's working directory | Recipe root. Every path is relative to it. |
+| `COOKMD_BASE_URL` | `https://cook.md` | Login, entitlements, import |
+| `NUTRITION_API_URL` | `https://nutrition.cook.md` | Nutrition service |
+| `NUTRITION_API_TOKEN` | none | Org key or pre-made token. Takes priority over the stored login. |
+| `COOK_MCP_AUTH_PATH` | `~/.config/cook-mcp/auth.json` | Token store. The old `NUTRITION_MCP_AUTH_PATH` still works as an alias. |
+
+## Things to ask
+
+- "Plan dinners for next week from my recipes and make the shopping list."
+- "What can I cook with what's in my pantry?"
+- "Check my whole collection for broken references."
+- "Import https://example.com/some-recipe as a recipe."
+- "How much protein is in this week's plan?" (needs Cook Basic or Pro)
+
+## Building from source
+
+```sh
+cargo build --release
+cargo test
+```
+
+The binary is `target/release/cook-mcp`. It speaks MCP over stdio. `cook-mcp login` and `cook-mcp logout` manage the cook.md login from a terminal.
+
+## Migrating from nutrition-mcp
+
+`@cookmd/nutrition-mcp` keeps working: it is now a thin shim that runs `@cookmd/mcp`. To switch, change the package name in your MCP config to `@cookmd/mcp`. Your login carries over.
+
+## License
+
+MIT
