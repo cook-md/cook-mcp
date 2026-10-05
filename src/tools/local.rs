@@ -40,7 +40,9 @@ fn rel(ws: &crate::workspace::Workspace, p: &Utf8Path) -> String {
 fn walk(dir: &Utf8Path, out: &mut Vec<camino::Utf8PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
-        let Ok(path) = camino::Utf8PathBuf::from_path_buf(entry.path()) else { continue };
+        let Ok(path) = camino::Utf8PathBuf::from_path_buf(entry.path()) else {
+            continue;
+        };
         let name = path.file_name().unwrap_or("");
         if name.starts_with('.') {
             continue;
@@ -55,20 +57,67 @@ fn walk(dir: &Utf8Path, out: &mut Vec<camino::Utf8PathBuf>) -> std::io::Result<(
 }
 
 fn tags_of(ws: &crate::workspace::Workspace, path: &Utf8Path) -> Vec<String> {
-    let Ok(text) = std::fs::read_to_string(path) else { return vec![] };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return vec![];
+    };
     let name = path.file_stem().unwrap_or("recipe");
     let _ = ws;
     match cookcli_core::parse_recipe(&text, name, 1.0) {
-        Ok(o) => o.value.metadata.tags().unwrap_or_default().into_iter().map(|t| t.to_lowercase()).collect(),
+        Ok(o) => o
+            .value
+            .metadata
+            .tags()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| t.to_lowercase())
+            .collect(),
         Err(_) => vec![],
     }
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ValidateArgs {
+    /// A .cook/.menu file or a folder, relative to the recipe root. Omit both
+    /// `path` and `content` to validate the whole collection.
+    pub path: Option<String>,
+    /// Unsaved Cooklang text to check instead of a file.
+    pub content: Option<String>,
+    /// With `content`: where it would be saved (decides .cook vs .menu and how
+    /// `@./` references resolve). Default "Untitled.cook".
+    pub as_path: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WriteArgs {
+    /// Destination relative to the recipe root, e.g. "Dinner/Leek Soup.cook".
+    pub path: String,
+    /// Full file content. Metadata goes in YAML frontmatter (--- ... ---), never `>>` lines.
+    pub content: String,
+    /// Save even if validation finds errors. Default false.
+    pub force: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ShoppingArgs {
+    /// Recipes and/or .menu plans, relative to the recipe root. Append `:N` to
+    /// scale one, e.g. "Dinner/Pasta.cook:2".
+    pub recipes: Vec<String>,
+    /// Don't subtract what config/pantry.conf already holds. Default false.
+    pub ignore_pantry: Option<bool>,
+    /// "json" (default, grouped by aisle) or "markdown".
+    pub format: Option<String>,
+}
+
 #[tool_router(router = local_router, vis = "pub(crate)")]
 impl CookMcp {
-    #[tool(description = "List the .cook recipes and .menu meal plans in the recipe collection. \
-        Returns paths relative to the recipe root; pass them unchanged to other tools.")]
-    async fn list_recipes(&self, Parameters(a): Parameters<ListArgs>) -> Result<CallToolResult, rmcp::ErrorData> {
+    #[tool(
+        description = "List the .cook recipes and .menu meal plans in the recipe collection. \
+        Returns paths relative to the recipe root; pass them unchanged to other tools."
+    )]
+    async fn list_recipes(
+        &self,
+        Parameters(a): Parameters<ListArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         let ws = &self.workspace;
         let dir = match a.dir.as_deref() {
             None | Some("") | Some(".") => ws.root().to_owned(),
@@ -89,18 +138,27 @@ impl CookMcp {
                 "menu" => p.extension() == Some("menu"),
                 _ => true,
             })
-            .map(|p| serde_json::json!({
-                "path": rel(ws, p),
-                "kind": if p.extension() == Some("menu") { "menu" } else { "recipe" },
-            }))
+            .map(|p| {
+                serde_json::json!({
+                    "path": rel(ws, p),
+                    "kind": if p.extension() == Some("menu") { "menu" } else { "recipe" },
+                })
+            })
             .collect();
         recipes.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
-        Ok(json_ok(&serde_json::json!({ "root": ws.root(), "recipes": recipes })))
+        Ok(json_ok(
+            &serde_json::json!({ "root": ws.root(), "recipes": recipes }),
+        ))
     }
 
-    #[tool(description = "Read one recipe or meal plan: its Cooklang source plus the parsed \
-        ingredients, cookware, steps and metadata, optionally scaled.")]
-    async fn read_recipe(&self, Parameters(a): Parameters<ReadArgs>) -> Result<CallToolResult, rmcp::ErrorData> {
+    #[tool(
+        description = "Read one recipe or meal plan: its Cooklang source plus the parsed \
+        ingredients, cookware, steps and metadata, optionally scaled."
+    )]
+    async fn read_recipe(
+        &self,
+        Parameters(a): Parameters<ReadArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         let ws = &self.workspace;
         let rel_path = match ws.relative(&a.path) {
             Ok(p) => p,
@@ -114,7 +172,9 @@ impl CookMcp {
             Err(e) => Ok(core_err(e)),
             Ok(outcome) => {
                 let path = outcome.value.path.clone();
-                let source = path.as_ref().and_then(|p| std::fs::read_to_string(ws.root().join(p)).ok());
+                let source = path
+                    .as_ref()
+                    .and_then(|p| std::fs::read_to_string(ws.root().join(p)).ok());
                 Ok(json_ok(&serde_json::json!({
                     "path": path.as_deref().map(|p| rel(ws, p)),
                     "title": outcome.value.title,
@@ -126,9 +186,14 @@ impl CookMcp {
         }
     }
 
-    #[tool(description = "Search the recipe collection by words (matches names and contents) \
-        and/or a frontmatter tag. Prefer this over reading files one by one.")]
-    async fn search_recipes(&self, Parameters(a): Parameters<SearchArgs>) -> Result<CallToolResult, rmcp::ErrorData> {
+    #[tool(
+        description = "Search the recipe collection by words (matches names and contents) \
+        and/or a frontmatter tag. Prefer this over reading files one by one."
+    )]
+    async fn search_recipes(
+        &self,
+        Parameters(a): Parameters<SearchArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         let ws = &self.workspace;
         let tag = a.tag.as_deref().map(str::to_lowercase);
         let candidates: Vec<(String, Option<String>)> = if a.query.trim().is_empty() {
@@ -139,20 +204,237 @@ impl CookMcp {
             let _ = walk(ws.root(), &mut files);
             files.iter().map(|p| (rel(ws, p), None)).collect()
         } else {
-            match search::search(&ws.context(), search::SearchRequest { query: a.query, base_dir: None }) {
+            match search::search(
+                &ws.context(),
+                search::SearchRequest {
+                    query: a.query,
+                    base_dir: None,
+                },
+            ) {
                 Err(e) => return Ok(core_err(e)),
-                Ok(o) => o.value.into_iter().map(|h| (h.relative_path.to_string(), h.name)).collect(),
+                Ok(o) => o
+                    .value
+                    .into_iter()
+                    .map(|h| (h.relative_path.to_string(), h.name))
+                    .collect(),
             }
         };
         let mut hits: Vec<serde_json::Value> = candidates
             .into_iter()
-            .filter(|(p, _)| tag.as_ref().is_none_or(|t| tags_of(ws, &ws.root().join(p)).contains(t)))
+            .filter(|(p, _)| {
+                tag.as_ref()
+                    .is_none_or(|t| tags_of(ws, &ws.root().join(p)).contains(t))
+            })
             .map(|(p, name)| serde_json::json!({ "path": p, "name": name }))
             .collect();
         if a.tag.is_some() {
             hits.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
         }
         Ok(json_ok(&serde_json::json!({ "hits": hits })))
+    }
+
+    #[tool(
+        description = "Check Cooklang for errors: a file, a folder, unsaved `content`, or \
+        (no arguments) the whole collection. Reports parse errors/warnings, recipe references \
+        that don't resolve, and ingredients missing from config/aisle.conf. Run before and \
+        after editing."
+    )]
+    async fn validate(
+        &self,
+        Parameters(a): Parameters<ValidateArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        use cookcli_core::doctor;
+        let ws = &self.workspace;
+        if let Some(content) = a.content {
+            let as_path = a.as_path.unwrap_or_else(|| "Untitled.cook".into());
+            let rel_path = match ws.relative(&as_path) {
+                Ok(p) => p,
+                Err(e) => return Ok(workspace_err(e)),
+            };
+            let mut diagnostics = ws.check(&content, &rel_path);
+            if crate::workspace::has_legacy_metadata(&content) {
+                diagnostics.push(cookcli_core::Diagnostic::error(
+                    "deprecated `>>` metadata: move it into YAML frontmatter between `---` lines",
+                ));
+            }
+            let ok = !diagnostics
+                .iter()
+                .any(|d| d.severity == cookcli_core::Severity::Error);
+            return Ok(json_ok(
+                &serde_json::json!({ "ok": ok, "diagnostics": diagnostics }),
+            ));
+        }
+        // A single file: same checks as a write, on the saved text.
+        if let Some(p) = a
+            .path
+            .as_deref()
+            .filter(|p| p.ends_with(".cook") || p.ends_with(".menu"))
+        {
+            let full = match ws.resolve(p) {
+                Ok(f) => f,
+                Err(e) => return Ok(workspace_err(e)),
+            };
+            let Ok(text) = std::fs::read_to_string(&full) else {
+                return Ok(text_err(format!("no such file: {p}")));
+            };
+            let rel_path = ws.relative(p).expect("resolved above");
+            let diagnostics = ws.check(&text, &rel_path);
+            let ok = !diagnostics
+                .iter()
+                .any(|d| d.severity == cookcli_core::Severity::Error);
+            return Ok(json_ok(
+                &serde_json::json!({ "ok": ok, "path": rel_path, "diagnostics": diagnostics }),
+            ));
+        }
+        let base_dir = match a.path.as_deref() {
+            None | Some("") | Some(".") => None,
+            Some(d) => match ws.resolve(d) {
+                Ok(p) => Some(p),
+                Err(e) => return Ok(workspace_err(e)),
+            },
+        };
+        let ctx = ws.context();
+        let report = match doctor::validate(
+            &ctx,
+            doctor::ValidateRequest {
+                base_dir: base_dir.clone(),
+                ..Default::default()
+            },
+        ) {
+            Ok(o) => o.value,
+            Err(e) => return Ok(core_err(e)),
+        };
+        let broken = doctor::broken_references(&report);
+        let problems: Vec<serde_json::Value> = report
+            .recipes
+            .iter()
+            .filter(|r| !r.diagnostics.is_empty() || broken.contains_key(r.path.as_path()))
+            .map(|r| {
+                serde_json::json!({
+                    "path": r.path,
+                    "diagnostics": r.diagnostics,
+                    "broken_references": broken.get(r.path.as_path()).cloned().unwrap_or_default(),
+                })
+            })
+            .collect();
+        let aisle = doctor::aisle_coverage(&ctx, doctor::CoverageRequest { base_dir })
+            .ok()
+            .map(|o| {
+                let unknown: Vec<&str> = o
+                    .value
+                    .ingredients
+                    .iter()
+                    .filter(|i| !i.known)
+                    .map(|i| i.name.as_str())
+                    .collect();
+                serde_json::json!({ "configured": !ctx.aisle().is_unset(), "unknown": unknown })
+            });
+        Ok(json_ok(&serde_json::json!({
+            "total_recipes": report.total_recipes(),
+            "recipes_with_errors": report.recipes_with_errors(),
+            "recipes_with_broken_references": broken.len(),
+            "problems": problems,
+            "aisle": aisle,
+        })))
+    }
+
+    #[tool(
+        description = "Save a .cook recipe in the recipe collection. The content is validated \
+        first and NOT saved if it has errors (pass force: true to override). Metadata must be YAML \
+        frontmatter; `>>` lines are always refused. This writes the file for real; tell the user \
+        what you saved and where."
+    )]
+    async fn write_recipe(
+        &self,
+        Parameters(a): Parameters<WriteArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if !a.path.ends_with(".cook") {
+            return Ok(text_err(
+                "write_recipe writes .cook files; use write_menu for .menu plans",
+            ));
+        }
+        Ok(
+            match self
+                .workspace
+                .write(&a.path, &a.content, a.force.unwrap_or(false))
+            {
+                Ok(report) => json_ok(&report),
+                Err(e) => workspace_err(e),
+            },
+        )
+    }
+
+    #[tool(
+        description = "Save a .menu meal plan. Reference only recipes that exist, as \
+        `@./path/to/Recipe{N%servings}` (path from list_recipes, no extension); every reference \
+        is checked and the plan is NOT saved if one doesn't resolve (force: true overrides)."
+    )]
+    async fn write_menu(
+        &self,
+        Parameters(a): Parameters<WriteArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if !a.path.ends_with(".menu") {
+            return Ok(text_err(
+                "write_menu writes .menu files; use write_recipe for .cook recipes",
+            ));
+        }
+        Ok(
+            match self
+                .workspace
+                .write(&a.path, &a.content, a.force.unwrap_or(false))
+            {
+                Ok(report) => json_ok(&report),
+                Err(e) => workspace_err(e),
+            },
+        )
+    }
+
+    #[tool(
+        description = "Build a shopping list from recipes and/or .menu plans: merges duplicate \
+        ingredients, follows recipe references, groups by config/aisle.conf and subtracts \
+        config/pantry.conf."
+    )]
+    async fn shopping_list(
+        &self,
+        Parameters(a): Parameters<ShoppingArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        use cookcli_core::shopping_list::{self, GenerateRequest, ScaledRecipe};
+        let ws = &self.workspace;
+        let mut recipes = Vec::new();
+        for entry in &a.recipes {
+            let (name, scale) =
+                recipe::split_name_and_scale(entry).unwrap_or((entry.as_str(), 1.0));
+            match ws.relative(name) {
+                Ok(p) => recipes.push(ScaledRecipe::scaled(RecipeSource::Path(p), scale)),
+                Err(e) => return Ok(workspace_err(e)),
+            }
+        }
+        let mut ctx = ws.context();
+        if a.ignore_pantry.unwrap_or(false) {
+            ctx = ctx.with_pantry(cookcli_core::ConfigSource::None);
+        }
+        let outcome = match shopping_list::generate(
+            &ctx,
+            GenerateRequest {
+                recipes,
+                ..Default::default()
+            },
+        ) {
+            Ok(o) => o,
+            Err(e) => return Ok(core_err(e)),
+        };
+        let diagnostics = outcome.diagnostics;
+        let list = outcome.value;
+        Ok(match a.format.as_deref() {
+            Some("markdown") => json_ok(&serde_json::json!({
+                "markdown": cookcli_core::format::shopping_list::build_md_value(list, false, false),
+                "diagnostics": diagnostics,
+            })),
+            _ => json_ok(&serde_json::json!({
+                "list": cookcli_core::format::shopping_list::build_json_value(list, false),
+                "diagnostics": diagnostics,
+            })),
+        })
     }
 }
 
@@ -179,13 +461,37 @@ pub(crate) mod tests {
     async fn list_recipes_lists_cook_and_menu_files() {
         let (_d, ws) = fixture_workspace();
         let s = server(ws);
-        let v = json(&s.list_recipes(Parameters(ListArgs { dir: None, kind: None })).await.unwrap());
-        let paths: Vec<&str> = v["recipes"].as_array().unwrap().iter().map(|r| r["path"].as_str().unwrap()).collect();
+        let v = json(
+            &s.list_recipes(Parameters(ListArgs {
+                dir: None,
+                kind: None,
+            }))
+            .await
+            .unwrap(),
+        );
+        let paths: Vec<&str> = v["recipes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["path"].as_str().unwrap())
+            .collect();
         assert_eq!(
             paths,
-            ["Breakfast/Pancakes.cook", "Dinner/Pasta.cook", "Plans/Week.menu", "Shared/Tomato Sauce.cook"]
+            [
+                "Breakfast/Pancakes.cook",
+                "Dinner/Pasta.cook",
+                "Plans/Week.menu",
+                "Shared/Tomato Sauce.cook"
+            ]
         );
-        let menus = json(&s.list_recipes(Parameters(ListArgs { dir: None, kind: Some("menu".into()) })).await.unwrap());
+        let menus = json(
+            &s.list_recipes(Parameters(ListArgs {
+                dir: None,
+                kind: Some("menu".into()),
+            }))
+            .await
+            .unwrap(),
+        );
         assert_eq!(menus["recipes"].as_array().unwrap().len(), 1);
     }
 
@@ -193,19 +499,40 @@ pub(crate) mod tests {
     async fn read_recipe_scales_and_returns_source() {
         let (_d, ws) = fixture_workspace();
         let s = server(ws);
-        let v = json(&s.read_recipe(Parameters(ReadArgs { path: "Breakfast/Pancakes.cook".into(), scale: Some(2.0) })).await.unwrap());
+        let v = json(
+            &s.read_recipe(Parameters(ReadArgs {
+                path: "Breakfast/Pancakes.cook".into(),
+                scale: Some(2.0),
+            }))
+            .await
+            .unwrap(),
+        );
         assert_eq!(v["title"], "Pancakes");
         assert_eq!(v["path"], "Breakfast/Pancakes.cook");
         assert!(v["source"].as_str().unwrap().contains("@flour{200%g}"));
-        let flour = v["recipe"]["ingredients"].as_array().unwrap().iter().find(|i| i["name"] == "flour").unwrap();
-        assert_eq!(flour["quantity"]["value"]["value"]["value"], 400.0, "scaled ×2: {flour}");
+        let flour = v["recipe"]["ingredients"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["name"] == "flour")
+            .unwrap();
+        assert_eq!(
+            flour["quantity"]["value"]["value"]["value"], 400.0,
+            "scaled ×2: {flour}"
+        );
     }
 
     #[tokio::test]
     async fn read_recipe_by_bare_name() {
         let (_d, ws) = fixture_workspace();
         let s = server(ws);
-        let r = s.read_recipe(Parameters(ReadArgs { path: "Breakfast/Pancakes".into(), scale: None })).await.unwrap();
+        let r = s
+            .read_recipe(Parameters(ReadArgs {
+                path: "Breakfast/Pancakes".into(),
+                scale: None,
+            }))
+            .await
+            .unwrap();
         assert_eq!(json(&r)["path"], "Breakfast/Pancakes.cook");
     }
 
@@ -213,11 +540,130 @@ pub(crate) mod tests {
     async fn search_matches_content_and_filters_by_tag() {
         let (_d, ws) = fixture_workspace();
         let s = server(ws);
-        let v = json(&s.search_recipes(Parameters(SearchArgs { query: "garlic".into(), tag: None })).await.unwrap());
+        let v = json(
+            &s.search_recipes(Parameters(SearchArgs {
+                query: "garlic".into(),
+                tag: None,
+            }))
+            .await
+            .unwrap(),
+        );
         assert_eq!(v["hits"][0]["path"], "Shared/Tomato Sauce.cook");
-        let v = json(&s.search_recipes(Parameters(SearchArgs { query: "".into(), tag: Some("breakfast".into()) })).await.unwrap());
+        let v = json(
+            &s.search_recipes(Parameters(SearchArgs {
+                query: "".into(),
+                tag: Some("breakfast".into()),
+            }))
+            .await
+            .unwrap(),
+        );
         let hits = v["hits"].as_array().unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0]["path"], "Breakfast/Pancakes.cook");
+    }
+
+    #[tokio::test]
+    async fn validate_inline_content_reports_errors_and_broken_refs() {
+        let (_d, ws) = fixture_workspace();
+        let s = server(ws);
+        let v = json(
+            &s.validate(Parameters(ValidateArgs {
+                path: None,
+                content: Some("Toss with @./Shared/Nope{1%servings}.\n".into()),
+                as_path: Some("Dinner/New.cook".into()),
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(v["ok"], false);
+        assert!(v["diagnostics"].to_string().contains("./Shared/Nope"));
+    }
+
+    #[tokio::test]
+    async fn validate_collection_summarises() {
+        let (d, ws) = fixture_workspace();
+        std::fs::write(d.path().join("Broken.cook"), "Add @{1%tsp}.\n").unwrap();
+        let s = server(ws);
+        let v = json(
+            &s.validate(Parameters(ValidateArgs {
+                path: None,
+                content: None,
+                as_path: None,
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(v["total_recipes"], 5);
+        assert_eq!(v["recipes_with_errors"], 1);
+        assert_eq!(v["problems"][0]["path"], "Broken.cook");
+        assert!(
+            v["aisle"]["unknown"].as_array().unwrap().is_empty(),
+            "fixture aisle covers everything: {v}"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_recipe_refuses_invalid_and_reports_success() {
+        let (d, ws) = fixture_workspace();
+        let s = server(ws);
+        let r = s
+            .write_recipe(Parameters(WriteArgs {
+                path: "X.cook".into(),
+                content: "Add @{1%tsp}.\n".into(),
+                force: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        assert!(text_of(&r).contains("invalid_cooklang"));
+        assert!(!d.path().join("X.cook").exists());
+        let r = s
+            .write_recipe(Parameters(WriteArgs {
+                path: "X.cook".into(),
+                content: "Fry @eggs{2}.\n".into(),
+                force: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(json(&r)["status"], "created");
+    }
+
+    #[tokio::test]
+    async fn write_menu_requires_menu_extension() {
+        let (_d, ws) = fixture_workspace();
+        let s = server(ws);
+        let r = s
+            .write_menu(Parameters(WriteArgs {
+                path: "Plans/Next.cook".into(),
+                content: "x".into(),
+                force: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn shopping_list_from_menu_subtracts_pantry() {
+        let (_d, ws) = fixture_workspace();
+        let s = server(ws);
+        let v = json(
+            &s.shopping_list(Parameters(ShoppingArgs {
+                recipes: vec!["Plans/Week.menu".into()],
+                ignore_pantry: None,
+                format: None,
+            }))
+            .await
+            .unwrap(),
+        );
+        let text = v.to_string();
+        assert!(
+            text.contains("tomatoes"),
+            "menu → pasta → sauce reference resolved: {text}"
+        );
+        assert!(
+            !text.contains("\"flour\""),
+            "flour is in the pantry: {text}"
+        );
     }
 }
