@@ -45,7 +45,7 @@ impl DeviceFlow {
         let resp = self
             .http
             .post(format!("{}/oauth/device/code", self.cookmd_url))
-            .form(&[("client_name", "nutrition-mcp")])
+            .form(&[("client_name", "Cook MCP")])
             .send()
             .await?
             .error_for_status()?;

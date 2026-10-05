@@ -123,7 +123,7 @@ mod tests {
         let over = token_override.map(str::to_string);
         let cookmd = cookmd_url.map(str::to_string);
         Config::from_vars(move |k| match k {
-            "NUTRITION_MCP_AUTH_PATH" => Some(path.clone()),
+            "COOK_MCP_AUTH_PATH" => Some(path.clone()),
             "NUTRITION_API_TOKEN" => over.clone(),
             "COOKMD_BASE_URL" => cookmd.clone(),
             _ => None,

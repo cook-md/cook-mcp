@@ -547,7 +547,7 @@ mod tests {
         let auth_path = dir.keep().join("auth.json");
         let cfg = crate::config::Config::from_vars(|k| match k {
             "NUTRITION_API_URL" | "COOKMD_BASE_URL" => Some(mock_uri.to_string()),
-            "NUTRITION_MCP_AUTH_PATH" => Some(auth_path.to_string_lossy().into_owned()),
+            "COOK_MCP_AUTH_PATH" => Some(auth_path.to_string_lossy().into_owned()),
             _ => None,
         });
         NutritionMcp::new(cfg)
@@ -559,7 +559,7 @@ mod tests {
         let cfg = crate::config::Config::from_vars(|k| match k {
             "NUTRITION_API_URL" | "COOKMD_BASE_URL" => Some(mock_uri.to_string()),
             "NUTRITION_API_TOKEN" => Some(token.to_string()),
-            "NUTRITION_MCP_AUTH_PATH" => Some(auth_path.to_string_lossy().into_owned()),
+            "COOK_MCP_AUTH_PATH" => Some(auth_path.to_string_lossy().into_owned()),
             _ => None,
         });
         NutritionMcp::new(cfg)

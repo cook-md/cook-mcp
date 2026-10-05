@@ -27,10 +27,10 @@ impl Config {
         let trim = |s: String| s.trim_end_matches('/').to_string();
         Self {
             api_url: get("NUTRITION_API_URL")
-                .map(&trim)
+                .map(trim)
                 .unwrap_or_else(|| "https://nutrition.cook.md".into()),
             cookmd_url: get("COOKMD_BASE_URL")
-                .map(&trim)
+                .map(trim)
                 .unwrap_or_else(|| "https://cook.md".into()),
             token_override: get("NUTRITION_API_TOKEN"),
             auth_path: get("COOK_MCP_AUTH_PATH")

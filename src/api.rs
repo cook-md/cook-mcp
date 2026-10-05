@@ -140,7 +140,7 @@ mod tests {
             "NUTRITION_API_URL" => Some(mock_uri.to_string()),
             "COOKMD_BASE_URL" => Some(mock_uri.to_string()),
             "NUTRITION_API_TOKEN" => token.map(String::from),
-            "NUTRITION_MCP_AUTH_PATH" => Some(auth_path.to_string_lossy().into_owned()),
+            "COOK_MCP_AUTH_PATH" => Some(auth_path.to_string_lossy().into_owned()),
             _ => None,
         });
         ApiClient::new(cfg.clone(), Arc::new(AuthManager::new(&cfg)))
