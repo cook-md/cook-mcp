@@ -49,6 +49,7 @@ impl ServerHandler for CookMcp {
                 .enable_resources()
                 .build(),
         )
+        .with_server_info(Implementation::new("cook-mcp", env!("CARGO_PKG_VERSION")))
         .with_instructions(crate::knowledge::INSTRUCTIONS)
     }
 

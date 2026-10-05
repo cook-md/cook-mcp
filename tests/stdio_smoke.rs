@@ -34,7 +34,7 @@ fn initialize_and_list_tools_over_stdio() {
     .unwrap();
     let resp: serde_json::Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
     assert_eq!(resp["id"], 1);
-    assert!(resp["result"]["serverInfo"]["name"].is_string());
+    assert_eq!(resp["result"]["serverInfo"]["name"], "cook-mcp");
 
     writeln!(
         stdin,

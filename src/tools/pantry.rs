@@ -78,6 +78,9 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<PantryListArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Some(e) = self.unset_guard() {
+            return Ok(e);
+        }
         Ok(
             match pantry::list(
                 &self.workspace.context(),
@@ -102,6 +105,9 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<ExpiringArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Some(e) = self.unset_guard() {
+            return Ok(e);
+        }
         let req = pantry::ExpiringRequest {
             days: a.days.unwrap_or(7),
             include_unknown: false,
@@ -119,6 +125,9 @@ impl CookMcp {
 
     #[tool(description = "Pantry items at or below their low-stock threshold.")]
     async fn pantry_depleted(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Some(e) = self.unset_guard() {
+            return Ok(e);
+        }
         Ok(
             match pantry::depleted(
                 &self.workspace.context(),
@@ -141,6 +150,9 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<PantryRecipesArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Some(e) = self.unset_guard() {
+            return Ok(e);
+        }
         let req = pantry::RecipesRequest {
             threshold: a.threshold.unwrap_or(50),
         };
@@ -164,6 +176,9 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<PantryUpdateArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Some(e) = self.unset_guard() {
+            return Ok(e);
+        }
         let ctx = self.workspace.context();
         if !pantry_in_root(&ctx, self.workspace.root()) {
             return Ok(text_err(

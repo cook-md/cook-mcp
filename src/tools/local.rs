@@ -28,6 +28,7 @@ pub struct ReadArgs {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SearchArgs {
     /// Words to match against recipe names and contents. May be empty when `tag` is set.
+    #[serde(default)]
     pub query: String,
     /// Only recipes whose frontmatter `tags` contain this tag (case-insensitive).
     pub tag: Option<String>,
@@ -147,12 +148,16 @@ pub struct ShoppingArgs {
 impl CookMcp {
     #[tool(
         description = "List the .cook recipes and .menu meal plans in the recipe collection. \
+        Set `kind` to \"recipe\", \"menu\", \"template\" (report templates) or \"all\". \
         Returns paths relative to the recipe root; pass them unchanged to other tools."
     )]
     async fn list_recipes(
         &self,
         Parameters(a): Parameters<ListArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Some(e) = self.unset_guard() {
+            return Ok(e);
+        }
         let ws = &self.workspace;
         let dir = match a.dir.as_deref() {
             None | Some("") | Some(".") => ws.root().to_owned(),
@@ -215,6 +220,9 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<ReadArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Some(e) = self.unset_guard() {
+            return Ok(e);
+        }
         let ws = &self.workspace;
         let scale = a.scale.unwrap_or(1.0);
         if !valid_scale(scale) {
@@ -260,6 +268,9 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<SearchArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Some(e) = self.unset_guard() {
+            return Ok(e);
+        }
         let ws = &self.workspace;
         let tag = a.tag.as_deref().map(str::to_lowercase);
         let candidates: Vec<(String, Option<String>)> = if a.query.trim().is_empty() {
@@ -310,6 +321,9 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<ValidateArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Some(e) = self.unset_guard() {
+            return Ok(e);
+        }
         use cookcli_core::doctor;
         let ws = &self.workspace;
         if let Some(content) = a.content {
@@ -437,6 +451,9 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<WriteArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Some(e) = self.unset_guard() {
+            return Ok(e);
+        }
         if !a.path.ends_with(".cook") {
             return Ok(text_err(
                 "write_recipe writes .cook files; use write_menu for .menu plans",
@@ -462,6 +479,9 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<WriteArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Some(e) = self.unset_guard() {
+            return Ok(e);
+        }
         if !a.path.ends_with(".menu") {
             return Ok(text_err(
                 "write_menu writes .menu files; use write_recipe for .cook recipes",
@@ -489,6 +509,9 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<WriteConfigArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Some(e) = self.unset_guard() {
+            return Ok(e);
+        }
         Ok(match self.workspace.write_config(&a.path, &a.content) {
             Ok(report) => json_ok(&report),
             Err(e) => workspace_err(e),
@@ -504,6 +527,9 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<ShoppingArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Some(e) = self.unset_guard() {
+            return Ok(e);
+        }
         use cookcli_core::shopping_list::{self, GenerateRequest, ScaledRecipe};
         let ws = &self.workspace;
         if a.recipes.is_empty() {
@@ -570,6 +596,22 @@ pub(crate) mod tests {
             (k == "COOK_MCP_AUTH_PATH").then(|| auth.to_string_lossy().into_owned())
         });
         CookMcp::new(cfg, ws)
+    }
+
+    #[tokio::test]
+    async fn unset_workspace_returns_hint_from_local_tools() {
+        let (_d, mut ws) = fixture_workspace();
+        ws.set_unset_for_test();
+        let s = server(ws);
+        let r = s
+            .list_recipes(Parameters(ListArgs {
+                dir: None,
+                kind: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        assert!(text_of(&r).contains("COOK_RECIPES_DIR"));
     }
 
     fn json(r: &CallToolResult) -> serde_json::Value {

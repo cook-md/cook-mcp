@@ -23,6 +23,16 @@ pub(crate) fn text_err(msg: impl Into<String>) -> CallToolResult {
     CallToolResult::error(vec![ContentBlock::text(msg.into())])
 }
 
+impl crate::server::CookMcp {
+    /// `Some(error)` when no recipe folder is configured; local tools return it
+    /// as their result instead of touching the filesystem.
+    pub(crate) fn unset_guard(&self) -> Option<CallToolResult> {
+        self.workspace
+            .is_unset()
+            .then(|| text_err(crate::workspace::UNSET_HINT))
+    }
+}
+
 /// A `cookcli-core` failure as a tool error. Parse failures keep their
 /// diagnostics and the parser's report so the agent can fix the line.
 pub(crate) fn core_err(e: cookcli_core::CoreError) -> CallToolResult {

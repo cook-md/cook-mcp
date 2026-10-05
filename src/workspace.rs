@@ -14,6 +14,19 @@ pub struct Workspace {
     /// The root as the caller gave it (absolute, symlinks kept), so absolute
     /// paths built from it are accepted too.
     given_root: Utf8PathBuf,
+    /// True when no recipe folder was configured and the working directory is
+    /// `/` or the home directory (a client launched outside any project).
+    /// Local tools refuse to run instead of scanning it.
+    unset: bool,
+}
+
+pub const UNSET_HINT: &str = "No recipe folder set. Set COOK_RECIPES_DIR to your recipes folder in this MCP server's config (env), or start the client in that folder.";
+
+/// Whether a candidate root is too broad to treat as a recipe folder.
+fn is_unset_root(root: &std::path::Path, home: Option<&std::path::Path>) -> bool {
+    let canon = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let root = canon(root);
+    root.parent().is_none() || home.is_some_and(|h| canon(h) == root)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -56,16 +69,42 @@ impl Workspace {
             .with_context(|| format!("recipe root {} does not exist", root.display()))?;
         let root = Utf8PathBuf::from_path_buf(canon)
             .map_err(|p| anyhow!("recipe root {} is not valid UTF-8", p.display()))?;
-        Ok(Self { root, given_root })
+        Ok(Self {
+            root,
+            given_root,
+            unset: false,
+        })
     }
 
     /// `COOK_RECIPES_DIR`, else the process working directory (MCP clients
     /// launch stdio servers in the project folder).
     pub fn from_config(cfg: &Config) -> anyhow::Result<Self> {
+        Self::from_config_with(cfg, &std::env::current_dir()?, dirs::home_dir().as_deref())
+    }
+
+    fn from_config_with(
+        cfg: &Config,
+        cwd: &std::path::Path,
+        home: Option<&std::path::Path>,
+    ) -> anyhow::Result<Self> {
         match &cfg.recipes_dir {
             Some(dir) => Self::new(dir),
-            None => Self::new(std::env::current_dir()?),
+            None => {
+                let mut ws = Self::new(cwd)?;
+                ws.unset = is_unset_root(cwd, home);
+                Ok(ws)
+            }
         }
+    }
+
+    #[cfg(test)]
+    pub fn set_unset_for_test(&mut self) {
+        self.unset = true;
+    }
+
+    /// No usable recipe folder was configured; see [`UNSET_HINT`].
+    pub fn is_unset(&self) -> bool {
+        self.unset
     }
 
     pub fn root(&self) -> &Utf8Path {
@@ -343,6 +382,30 @@ fn write_atomically(path: &Utf8Path, content: &str) -> Result<(), WorkspaceError
 mod tests {
     use super::*;
     use crate::test_support::fixture_workspace;
+
+    #[test]
+    fn root_or_home_without_config_is_unset() {
+        let cfg = Config::from_vars(|_| None);
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let proj = tmp.path().join("proj");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&proj).unwrap();
+        let at =
+            |cwd: &std::path::Path| Workspace::from_config_with(&cfg, cwd, Some(&home)).unwrap();
+        assert!(at(std::path::Path::new("/")).is_unset());
+        assert!(at(&home).is_unset());
+        assert!(!at(&proj).is_unset());
+        // An explicit COOK_RECIPES_DIR is always honoured, even at home.
+        let explicit = Config::from_vars(|k| {
+            (k == "COOK_RECIPES_DIR").then(|| home.to_string_lossy().into_owned())
+        });
+        assert!(
+            !Workspace::from_config_with(&explicit, std::path::Path::new("/"), Some(&home))
+                .unwrap()
+                .is_unset()
+        );
+    }
 
     #[test]
     fn relative_paths_resolve_inside_root() {

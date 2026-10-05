@@ -147,7 +147,7 @@ const IMPORT_FALLBACK: &str = "If the user doesn't want to upgrade: read the sou
 impl CookMcp {
     #[tool(description = "Nutrition facts for one ingredient amount (macros, \
         micros, allergens, %DV). Errors include `suggestions` with close \
-        catalog names — retry with one of those on ingredient_not_found.")]
+        catalog names — retry with one of those on ingredient_not_found. Needs a cook.md login with Cook Basic or Pro.")]
     async fn get_nutrition(
         &self,
         Parameters(a): Parameters<GetNutritionArgs>,
@@ -171,7 +171,7 @@ impl CookMcp {
 
     #[tool(description = "Sum nutrition across many ingredient lines (a whole \
         recipe). Per-item failures come back in `failures[]` with the item \
-        index and `suggestions` — fix those items and retry.")]
+        index and `suggestions` — fix those items and retry. Needs a cook.md login with Cook Basic or Pro.")]
     async fn aggregate_nutrition(
         &self,
         Parameters(a): Parameters<AggregateArgs>,
@@ -195,7 +195,7 @@ impl CookMcp {
     }
 
     #[tool(description = "Fuzzy-search the ingredient catalog. Use to debug why \
-        get_nutrition or render_report couldn't resolve an ingredient name.")]
+        get_nutrition or render_report couldn't resolve an ingredient name. Needs a cook.md login with Cook Basic or Pro.")]
     async fn lookup_ingredient(
         &self,
         Parameters(a): Parameters<LookupArgs>,
@@ -208,7 +208,7 @@ impl CookMcp {
     }
 
     #[tool(description = "Convert an amount between units. Volume<->mass needs \
-        `ingredient` (density lookup). Use to debug density_unavailable failures.")]
+        `ingredient` (density lookup). Use to debug density_unavailable failures. Needs a cook.md login with Cook Basic or Pro.")]
     async fn convert_units(
         &self,
         Parameters(a): Parameters<ConvertArgs>,
@@ -230,7 +230,9 @@ impl CookMcp {
         )
     }
 
-    #[tool(description = "Check whether an ingredient belongs to a category slug.")]
+    #[tool(
+        description = "Check whether an ingredient belongs to a category slug. Needs a cook.md login with Cook Basic or Pro."
+    )]
     async fn check_category(
         &self,
         Parameters(a): Parameters<CategoryArgs>,
@@ -258,7 +260,7 @@ impl CookMcp {
     }
 
     #[tool(description = "Look up a branded/packaged product by UPC barcode or \
-        text search. Provide exactly one of `upc` or `q`.")]
+        text search. Provide exactly one of `upc` or `q`. Needs a cook.md login with Cook Basic or Pro.")]
     async fn branded_lookup(
         &self,
         Parameters(a): Parameters<BrandedArgs>,
@@ -277,7 +279,7 @@ impl CookMcp {
 
     #[tool(
         description = "Daily reference-intake tables (RDA/DV) for a standard: \
-        fda, eu, or uk."
+        fda, eu, or uk. Needs a cook.md login with Cook Basic or Pro."
     )]
     async fn reference_intakes(
         &self,
@@ -307,6 +309,9 @@ impl CookMcp {
         Parameters(a): Parameters<RenderReportArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         use crate::render::{InputKind, RenderRequest, Source};
+        if let Some(e) = self.unset_guard() {
+            return Ok(e);
+        }
         let ws = &self.workspace;
         let resolve = |p: String| ws.resolve(&p).map(|full| full.into_std_path_buf());
         let template = match (a.template, a.template_path) {
@@ -478,6 +483,11 @@ impl CookMcp {
         Parameters(a): Parameters<ImportArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         use base64::Engine as _;
+        if a.image_paths.is_some()
+            && let Some(e) = self.unset_guard()
+        {
+            return Ok(e);
+        }
         let (route, body) = match (a.url, a.image_paths, a.text) {
             (Some(url), None, None) => ("/api/cookify/url", serde_json::json!({ "url": url })),
             (None, None, Some(text)) => ("/api/cookify/text", serde_json::json!({ "text": text })),
@@ -567,6 +577,12 @@ impl CookMcp {
             false
         };
         status["authenticated"] = authenticated.into();
+        if self.workspace.is_unset() {
+            status["recipe_root"] = serde_json::Value::Null;
+            status["recipe_root_hint"] = crate::workspace::UNSET_HINT.into();
+        } else {
+            status["recipe_root"] = self.workspace.root().as_str().into();
+        }
         if probe_subscription {
             match self.api.cookmd_get("/api/entitlements").await {
                 Ok(ApiOutcome::Ok(body)) => {
@@ -652,6 +668,57 @@ mod tests {
                 "estimated_ingredients": [], "estimated_share_of_micronutrients": null
             }
         })
+    }
+
+    #[tokio::test]
+    async fn unset_workspace_guards_local_cloud_tools_and_auth_status_reports_it() {
+        let mut s = server_for("http://127.0.0.1:1");
+        let mut ws = (*s.workspace).clone();
+        ws.set_unset_for_test();
+        s.workspace = std::sync::Arc::new(ws);
+        let r = s.auth_status().await.unwrap();
+        assert!(text_of(&r).contains("\"recipe_root\": null"));
+        assert!(text_of(&r).contains("COOK_RECIPES_DIR"));
+        let r = s
+            .render_report(Parameters(RenderReportArgs {
+                template: Some("x".into()),
+                template_path: None,
+                input: None,
+                input_path: None,
+                kind: None,
+                base_path: None,
+                scale: None,
+                client_profile_path: None,
+            }))
+            .await
+            .unwrap();
+        assert!(text_of(&r).contains("No recipe folder set"));
+    }
+
+    #[tokio::test]
+    async fn get_nutrition_works_with_unset_workspace() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/nutrition"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"kcal": 1})))
+            .mount(&mock)
+            .await;
+        let mut s = server_for(&mock.uri());
+        let mut ws = (*s.workspace).clone();
+        ws.set_unset_for_test();
+        s.workspace = std::sync::Arc::new(ws);
+        let r = s
+            .get_nutrition(Parameters(GetNutritionArgs {
+                ingredient: "salmon".into(),
+                amount: 1.0,
+                unit: None,
+                prep: None,
+                region: None,
+                reference: None,
+            }))
+            .await
+            .unwrap();
+        assert_ne!(r.is_error, Some(true));
     }
 
     #[tokio::test]
