@@ -30,7 +30,7 @@ tempfile = "3"
 # Pinned: 0.37.0 is the last cookcli-core on cooklang 0.18 / cooklang-reports 0.5,
 # the versions cooklang-reports-nutrition 0.1 is built against. Bump together.
 cookcli-core = "=0.37.0"
-cookmd-nutrition-client = "0.1"
+cookmd-nutrition-client = "0.1.1"
 cooklang-reports-nutrition = "0.1"
 cooklang-reports = "0.5"
 
