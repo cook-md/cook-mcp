@@ -38,6 +38,10 @@ pub enum WorkspaceError {
     LegacyMetadata,
     #[error("content has Cooklang errors; fix them, or pass force: true to save anyway")]
     Invalid { diagnostics: Vec<Diagnostic> },
+    #[error(
+        "cannot write `{path}`: it is a symlink (or sits in a symlinked folder) leading to `{target}`, a different kind of file; write that path directly"
+    )]
+    KindMismatch { path: String, target: String },
     #[error("{0}")]
     Io(String),
 }
@@ -142,7 +146,8 @@ enum Kind {
     Cooklang,
     Aisle,
     Pantry,
-    /// A jinja report template under `reports/`; free text, not validated.
+    /// A jinja report template under `reports/` or `config/reports/`; free
+    /// text, not validated.
     Template,
 }
 
@@ -217,6 +222,23 @@ impl Workspace {
         }
     }
 
+    /// Where a write to `full` really lands: the canonical file if it exists,
+    /// else the canonical deepest existing folder plus the rest of the path.
+    /// `resolve` already proved this is inside the root.
+    fn real_target(&self, full: &Utf8Path) -> Result<Utf8PathBuf, WorkspaceError> {
+        let mut probe = full;
+        while !probe.exists() {
+            probe = probe.parent().unwrap_or(&self.root);
+        }
+        let canon = std::fs::canonicalize(probe).map_err(|e| WorkspaceError::Io(e.to_string()))?;
+        let canon = Utf8PathBuf::from_path_buf(canon)
+            .map_err(|p| WorkspaceError::Io(format!("{} is not valid UTF-8", p.display())))?;
+        Ok(match full.strip_prefix(probe) {
+            Ok(rest) if !rest.as_str().is_empty() => canon.join(rest),
+            _ => canon,
+        })
+    }
+
     /// Write an aisle/pantry config or a report template (never Cooklang).
     /// Config problems come back as warnings; nothing here blocks the write.
     pub fn write_config(&self, path: &str, content: &str) -> Result<WriteReport, WorkspaceError> {
@@ -237,6 +259,17 @@ impl Workspace {
         let rel = self.relative(path)?;
         let kind = writable_kind(&rel).ok_or_else(|| WorkspaceError::Extension(path.into()))?;
         let full = self.resolve(path)?;
+        // Write to what a symlink points at so the link stays a link — but
+        // only if that is the same kind of file, so a `.jinja` or config name
+        // can't be used to overwrite a recipe unvalidated (or vice versa).
+        let target = self.real_target(&full)?;
+        let target_rel = target.strip_prefix(&self.root).unwrap_or(&target);
+        if writable_kind(target_rel) != Some(kind) {
+            return Err(WorkspaceError::KindMismatch {
+                path: path.into(),
+                target: target_rel.to_string(),
+            });
+        }
         let diagnostics = match kind {
             Kind::Template => Vec::new(),
             Kind::Aisle => config_warnings(
@@ -258,16 +291,6 @@ impl Workspace {
             return Err(WorkspaceError::Invalid { diagnostics });
         }
         let existed = full.exists();
-        // `resolve` proved an existing target sits inside the root; write to
-        // what a symlink points at so the link stays a link.
-        let target = if existed {
-            std::fs::canonicalize(&full)
-                .ok()
-                .and_then(|p| Utf8PathBuf::from_path_buf(p).ok())
-                .unwrap_or_else(|| full.clone())
-        } else {
-            full.clone()
-        };
         write_atomically(&target, content)?;
         Ok(WriteReport {
             path: rel.to_string(),
@@ -550,6 +573,60 @@ mod tests {
         );
         let err = ws.relative("/etc/passwd").unwrap_err().to_string();
         assert!(err.contains(ws.root().as_str()), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_cannot_change_what_kind_of_file_is_written() {
+        use std::os::unix::fs::symlink;
+        let (_d, ws) = fixture_workspace();
+        let root = ws.root().to_owned();
+        let pasta = std::fs::read_to_string(root.join("Dinner/Pasta.cook")).unwrap();
+        std::fs::create_dir_all(root.join("reports")).unwrap();
+        // A template or config name pointing at a recipe: no unvalidated overwrite.
+        symlink("../Dinner/Pasta.cook", root.join("reports/evil.jinja")).unwrap();
+        std::fs::remove_file(root.join("config/aisle.conf")).unwrap();
+        symlink("../Dinner/Pasta.cook", root.join("config/aisle.conf")).unwrap();
+        for path in ["reports/evil.jinja", "config/aisle.conf"] {
+            assert!(
+                matches!(
+                    ws.write_config(path, "x"),
+                    Err(WorkspaceError::KindMismatch { .. })
+                ),
+                "{path}"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(root.join("Dinner/Pasta.cook")).unwrap(),
+            pasta
+        );
+        // And the other way: a recipe name pointing at a template.
+        std::fs::write(root.join("reports/real.md.jinja"), "tpl").unwrap();
+        symlink("reports/real.md.jinja", root.join("Sneaky.cook")).unwrap();
+        assert!(matches!(
+            ws.write("Sneaky.cook", GOOD, false),
+            Err(WorkspaceError::KindMismatch { .. })
+        ));
+        assert_eq!(
+            std::fs::read_to_string(root.join("reports/real.md.jinja")).unwrap(),
+            "tpl"
+        );
+        // A new file through a symlinked folder is judged by where it lands.
+        symlink("../Dinner", root.join("config/reports")).unwrap();
+        assert!(matches!(
+            ws.write_config("config/reports/new.jinja", "x"),
+            Err(WorkspaceError::KindMismatch { .. })
+        ));
+        assert!(!root.join("Dinner/new.jinja").exists());
+    }
+
+    #[test]
+    fn dot_dot_template_paths_are_refused() {
+        let (_d, ws) = fixture_workspace();
+        assert!(matches!(
+            ws.write_config("reports/../x.jinja", "x"),
+            Err(WorkspaceError::UnsafePath(_))
+        ));
     }
 
     #[test]

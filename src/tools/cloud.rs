@@ -290,13 +290,18 @@ impl CookMcp {
         )
     }
 
-    #[tool(description = "Render a jinja nutrition report template against a \
-        .cook recipe or .menu plan. Returns {rendered, checks, \
-        resolve_failures}. Iterate: fix the template or recipe using \
-        resolve_failures[].error (code/message/suggestions), re-render until \
-        clean. Paths are relative to the recipe root. Templates that don't call nutrition functions work without a login; nutrition data needs Cook Basic or Pro. Scaling applies to .cook recipes only, \
-        not .menu quantities. Companion tools: lookup_ingredient for name \
-        misses, convert_units for unit/density issues.")]
+    #[tool(
+        description = "Render a jinja report template against a .cook recipe or .menu \
+        plan. Returns {rendered, checks, resolve_failures}. Plain templates work with no login \
+        and can use aisled(ingredients) (config/aisle.conf), excluding_pantry(ingredients) \
+        (config/pantry.conf) and db('key.path') (the db/ datastore). Nutrition functions \
+        (macros, aggregate_nutrition, ...) need a cook.md login and Cook Basic or Pro. Saved \
+        templates: list_recipes kind \"template\", then pass template_path. Iterate: fix the \
+        template or recipe using resolve_failures[].error (code/message/suggestions), re-render \
+        until clean. Paths are relative to the recipe root. Scaling applies to .cook recipes \
+        only, not .menu quantities. Companion tools: lookup_ingredient for name misses, \
+        convert_units for unit/density issues."
+    )]
     async fn render_report(
         &self,
         Parameters(a): Parameters<RenderReportArgs>,
@@ -362,7 +367,10 @@ impl CookMcp {
             client_profile_path,
             aisle_path: config_file(ctx.aisle()),
             pantry_path: config_file(ctx.pantry()),
-            datastore_path: db.is_dir().then(|| db.into_std_path_buf()),
+            // A real folder only: a symlinked db/ could read data from outside the root.
+            datastore_path: std::fs::symlink_metadata(&db)
+                .is_ok_and(|m| m.is_dir())
+                .then(|| db.into_std_path_buf()),
         };
         let api_url = self.cfg.api_url.clone();
         let bearer = self.auth.bearer().await;
@@ -1143,6 +1151,31 @@ mod tests {
             !out.contains("flour"),
             "pantry items should be skipped: {out}"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn render_report_ignores_symlinked_datastore() {
+        let (_d, ws) = crate::test_support::fixture_workspace();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(outside.path().join("eggs")).unwrap();
+        std::fs::write(outside.path().join("eggs/shopping.yml"), "price: 3.5\n").unwrap();
+        std::os::unix::fs::symlink(outside.path(), ws.root().join("db")).unwrap();
+        let s = CookMcp::new(crate::config::Config::from_vars(|_| None), ws);
+        let r = s
+            .render_report(Parameters(RenderReportArgs {
+                template: Some("{{ db('eggs.shopping.price') }}".into()),
+                template_path: None,
+                input: None,
+                input_path: Some("Breakfast/Pancakes.cook".into()),
+                kind: None,
+                base_path: None,
+                scale: None,
+                client_profile_path: None,
+            }))
+            .await
+            .unwrap();
+        assert!(!text_of(&r).contains("3.5"), "{}", text_of(&r));
     }
 
     #[tokio::test]

@@ -11,7 +11,7 @@ These rules are for .cook recipes. Menu files (.menu) share most syntax but are 
 
 ## Workflow
 
-1. Run `validate`: with `path` for one file or folder, with no arguments for the whole collection, or with `content` (plus `as_path`) for text that is not saved yet. It reports parse errors and warnings, recipe references that don't resolve, and ingredients missing from `config/aisle.conf`.
+1. Run `validate`: with `path` for one file or folder, with no arguments for the whole collection, or with `content` (plus `as_path`) for text that is not saved yet. It reports parse errors and warnings and recipe references that don't resolve; for a folder or the whole collection it also lists ingredients missing from `config/aisle.conf` — run `validate` with no arguments to see ingredients with no aisle. (It warns "Unnecessary scaling lock modifier" on fixed quantities `{=…}`: a known parser quirk; keep the `=` and ignore that warning.)
 2. Read the file with `read_recipe` (skip if the content is already in hand) and check it against every rule below too — some of them (a separate ingredient list, repeated quantities) parse fine and only show up as wrong data.
 3. For each violation, name the rule, quote the offending line, and give the corrected line.
 4. If the user wants it fixed, run `validate` on the corrected text (`content`), then save it with `write_recipe` (full file content).
@@ -33,7 +33,7 @@ These rules are for .cook recipes. Menu files (.menu) share most syntax but are 
 5. **Quantity form is `{n%unit}`.** The `%` separates amount from unit — reason: `{n unit}` treats the whole thing as one amount and `{n/unit}` is a fraction.
    - BAD: `@milk{1 cup}`, `@milk{1/cup}`
    - GOOD: `@milk{1%cup}`, `@milk{1/2%cup}`
-6. **Recipe references use `@./path` with no `.cook` extension.** Reason: the extension breaks reference resolution.
+6. **Recipe references use `@./path` with no `.cook` extension.** Reason: the spec's reference form has no extension.
    - BAD: `@./sauces/pesto.cook{150%g}`
    - GOOD: `@./sauces/pesto{150%g}`
 
@@ -42,5 +42,5 @@ These rules are for .cook recipes. Menu files (.menu) share most syntax but are 
 | Excuse | Rebuttal |
 |--------|----------|
 | "I only pointed out the errors, that's enough." | If the user wanted a fix, validate the corrected content and save it with `write_recipe`. Listing errors does not change the file. |
-| "`validate` passed, so the recipe is fine." | Rules 1 and 2 parse cleanly and still produce wrong ingredient lists. Read the recipe and check them by eye. |
+| "`validate` passed, so the recipe is fine." | Rules 1, 2, 3, 5 and 6 pass `validate`; check them by eye. |
 | "The recipe already has an ingredients list, keep it." | A separate ingredient list is the violation (rule 1). Remove it and put the quantities inline; do not preserve it. |

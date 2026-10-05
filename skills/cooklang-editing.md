@@ -13,7 +13,7 @@ This skill is for .cook recipes only. If the task is actually about a .menu meal
 
 1. If editing an existing file, read it with `read_recipe` first (use the path exactly as `list_recipes` / `search_recipes` returned it); understand its style and structure.
 2. If creating a file, look at the collection layout with `list_recipes` and pick an idiomatic folder and name that match the existing ones.
-3. Make the change using Cooklang syntax. For scaling, fixed quantities (`@salt{=1%tsp}`), or recipe references (`@./path`), consult the `cooklang://syntax` resource.
+3. Make the change using Cooklang syntax. For scaling, fixed quantities (`@salt{=1%tsp}`), or recipe references (`@./path`), consult the `cooklang://syntax` resource. `validate` warns "Unnecessary scaling lock modifier" on fixed quantities (`{=…}`): a known parser quirk; keep the `=` and ignore that warning.
 4. Self-check the content against the cooklang-validation rules — no separate ingredient section, each quantity declared once inline, multi-word names braced — then run `validate` with the new text as `content` (and `as_path` set to where it will be saved). Fix every error before saving.
 5. Save with `write_recipe`, always sending the full file content (there is no partial edit). It validates again and refuses to save content with errors.
 6. Tell the user what you saved and where.

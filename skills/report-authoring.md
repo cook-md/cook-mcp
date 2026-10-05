@@ -65,7 +65,7 @@ Filters available:
   `selectattr`, `items`, `length`.
 - Text: `titleize`, `humanize`, `upcase_first`.
 - Numbers: `number_with_precision`, `number_with_delimiter`,
-  `number_to_percentage`, `number_to_currency`, `numeric`.
+  `number_to_percentage`, `number_to_currency`, `format_price`, `numeric`.
 
 Example — an ingredients list:
 

@@ -19,7 +19,7 @@ Use the `shopping_list` tool. It does the arithmetic: merges duplicate ingredien
 
 ## Aisle grouping
 
-Items not listed in `config/aisle.conf` are not grouped under a store aisle. `validate` reports ingredients missing from it. If the user wants store-ordered output, author it. The file is a list of `[category]` sections; order of sections and items is significant — arrange to match the store layout. Define synonyms with `|`:
+Items not listed in `config/aisle.conf` are not grouped under a store aisle. Run `validate` with no arguments to see ingredients with no aisle. If the user wants store-ordered output, author it. The file is a list of `[category]` sections; order of sections and items is significant — arrange to match the store layout. Define synonyms with `|`:
 
 ```
 [produce]
@@ -33,7 +33,7 @@ butter
 tuna|chicken of the sea
 ```
 
-Save it with `write_config` (`path: "config/aisle.conf"`), always the full file — keep the existing sections and add to them. Parse problems come back as warnings in `diagnostics`; fix them and save again. Run `validate` afterwards to see which ingredients are still unassigned.
+Save it with `write_config` (`path: "config/aisle.conf"`), always the full file — keep the existing sections and add to them. Parse problems come back as warnings in `diagnostics`; fix them and save again. Afterwards, run `validate` with no arguments to see ingredients with no aisle.
 
 ## Saved lists in Cook apps
 

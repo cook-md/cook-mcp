@@ -13,7 +13,7 @@ nutrition service** (through `render_report`), choose edits, verify them
 
 Nutrition data needs a cook.md login and Cook Basic or Cook Pro. On
 "authentication required" call `login`; on "subscription required" show the
-user the pricing link from the error.
+user the pricing link from the error. The direct nutrition tools (`get_nutrition`, `aggregate_nutrition`, `lookup_ingredient`, …) return JSON `login_required` (call `login`) or `plan_required` (show the user `checkout_url`) instead.
 
 This skill changes food to reach numbers. For evaluation-only questions where
 no change is wanted ("is this healthy?", "how much protein is in this?"), follow

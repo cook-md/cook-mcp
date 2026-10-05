@@ -19,7 +19,7 @@ custom printouts, follow the report-authoring skill; its `aisled()` /
 Nutrition data needs a cook.md login and a Cook Basic or Cook Pro plan. If a render
 fails with "authentication required", call `login` and show the user the code and link,
 then retry. If it fails with "subscription required", show the user the pricing link from
-the error. `auth_status` tells you whether the user is logged in and on which plan.
+the error. The direct nutrition tools (`get_nutrition`, `aggregate_nutrition`, `lookup_ingredient`, …) return JSON `login_required` (call `login`) or `plan_required` (show the user `checkout_url`) instead. `auth_status` tells you whether the user is logged in and on which plan.
 
 ## How rendering works
 

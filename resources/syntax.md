@@ -31,7 +31,7 @@ Drizzle with @olive oil{1%tbsp} and toast in a #frying pan{} for ~{3%minutes}.
 ## Ingredients (full)
 
 - With quantity: `@potato{2}`, `@chicken{500%g}`, `@milk{1/2%cup}`
-- Fixed (don't scale): `@salt{=1%tsp}` — stays the same regardless of servings
+- Fixed (don't scale): `@salt{=1%tsp}` — stays the same regardless of servings. `validate` warns "Unnecessary scaling lock modifier" on `{=…}`: a known parser quirk; keep the `=` and ignore that warning.
 - With preparation: `@onion{1}(peeled and chopped)`
 - Recipe reference: `@./sauces/hollandaise{150%g}` — references another .cook file. Use the file path relative to the recipes folder. NEVER include the `.cook` extension.
 

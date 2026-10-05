@@ -170,17 +170,18 @@ impl CookMcp {
         let mut files = Vec::new();
         let listed = if want == "template" {
             // Templates live under reports/ and config/reports/; a missing
-            // folder is just empty.
+            // folder is just empty. Like walk(), never follow a symlinked
+            // folder (it could lead out of the root).
             crate::workspace::TEMPLATE_DIRS
                 .iter()
                 .map(|d| ws.root().join(d))
-                .filter(|d| d.is_dir())
-                .try_for_each(|d| walk_ext(&d, &["jinja"], &mut files))
+                .filter(|d| d.is_dir() && is_plain(ws, d))
+                .try_for_each(|d| walk_ext(&d, &["jinja"], &mut files).map_err(|e| (d.clone(), e)))
         } else {
-            walk(&dir, &mut files)
+            walk(&dir, &mut files).map_err(|e| (dir.clone(), e))
         };
-        if let Err(e) = listed {
-            return Ok(text_err(format!("cannot list {dir}: {e}")));
+        if let Err((folder, e)) = listed {
+            return Ok(text_err(format!("cannot list {folder}: {e}")));
         }
         let mut recipes: Vec<serde_json::Value> = files
             .iter()
@@ -301,9 +302,9 @@ impl CookMcp {
 
     #[tool(
         description = "Check Cooklang for errors: a file, a folder, unsaved `content`, or \
-        (no arguments) the whole collection. Reports parse errors/warnings, recipe references \
-        that don't resolve, and ingredients missing from config/aisle.conf. Run before and \
-        after editing."
+        (no arguments) the whole collection. Reports parse errors/warnings and recipe references \
+        that don't resolve; when validating a folder or the whole collection, also ingredients \
+        missing from config/aisle.conf. Run before and after editing."
     )]
     async fn validate(
         &self,
@@ -649,6 +650,29 @@ pub(crate) mod tests {
             .unwrap(),
         );
         assert_eq!(all["recipes"].as_array().unwrap().len(), 4);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_recipes_kind_template_skips_symlinked_template_dirs() {
+        let (_d, ws) = fixture_workspace();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("leak.jinja"), "x").unwrap();
+        std::os::unix::fs::symlink(outside.path(), ws.root().join("reports")).unwrap();
+        std::fs::create_dir_all(outside.path().join("reports")).unwrap();
+        std::fs::write(outside.path().join("reports/leak2.jinja"), "x").unwrap();
+        std::fs::remove_dir_all(ws.root().join("config")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), ws.root().join("config")).unwrap();
+        let s = server(ws);
+        let v = json(
+            &s.list_recipes(Parameters(ListArgs {
+                dir: None,
+                kind: Some("template".into()),
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(v["recipes"], serde_json::json!([]));
     }
 
     #[tokio::test]

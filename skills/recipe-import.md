@@ -10,9 +10,9 @@ Use when bringing a recipe in from a URL, photos, or pasted text.
 ## Workflow
 
 1. Call `import_recipe` with exactly one source:
-   - `url` — a recipe web page. Works without a login.
+   - `url` — a recipe web page. Works without a login; social-media links (videos, posts) need a cook.md account and use the import allowance of Cook Basic or Cook Pro.
    - `text` — recipe text the user pasted. Works without a login.
-   - `image_paths` — 1–10 photos (cookbook page, recipe card) as paths inside the collection. Photos and social-media links need a cook.md account and use the import allowance of Cook Basic or Cook Pro.
+   - `image_paths` — 1–10 photos (cookbook page, recipe card) as paths inside the collection. Photos need a cook.md account and use the import allowance of Cook Basic or Cook Pro.
    It returns Cooklang text (plus metadata) and does NOT save anything.
 2. On `login_required`, call `login` and show the user the code and link. On `plan_required`, show the user the `checkout_url`. If they don't want to upgrade, follow the returned `next_step`: read the source yourself and write the Cooklang by hand (cooklang-editing skill).
 3. Decide an output path: look at the collection layout with `list_recipes`, then pick a category folder and a name in the user's naming style. Check the name isn't taken — `write_recipe` overwrites.
