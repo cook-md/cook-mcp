@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.cook-md/cook-mcp",
+  "title": "Cook (Cooklang recipes)",
+  "description": "Cooklang recipes for AI agents: validate, meal plans, shopping lists, pantry, nutrition",
+  "websiteUrl": "https://cook.md/help/mcp",
+  "repository": {
+    "url": "https://github.com/cook-md/cook-mcp",
+    "source": "github"
+  },
+  "version": "0.2.3",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@cookmd/mcp",
+      "version": "0.2.3",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        {
+          "name": "COOK_RECIPES_DIR",
+          "description": "Recipe folder. If unset, the client's workspace roots, then the working directory.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "filepath"
+        }
+      ]
+    }
+  ]
+}

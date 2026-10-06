@@ -25,3 +25,22 @@ jobs:
           node --check packaging/npm-shim/bin/nutrition-mcp.js
           (cd packaging/npm && npm pack --dry-run)
           (cd packaging/npm-shim && npm pack --dry-run)
+      - name: Validate server.json (MCP Registry schema)
+        run: |
+          pip install --quiet jsonschema
+          python3 - <<'EOF'
+          import json, urllib.request, jsonschema
+          d = json.load(open("server.json"))
+          s = json.load(urllib.request.urlopen(d["$schema"]))
+          jsonschema.Draft202012Validator(s).validate(d)
+          print("server.json valid")
+          EOF
+      - name: Check versions agree
+        run: |
+          C="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          for v in "$(jq -r .version server.json)" "$(jq -r '.packages[0].version' server.json)" \
+                   "$(jq -r .version packaging/npm/package.json)" "$(jq -r .version packaging/npm-shim/package.json)" \
+                   "$(jq -r '.dependencies["@cookmd/mcp"]' packaging/npm-shim/package.json)"; do
+            [ "$v" = "$C" ] || { echo "version drift: $v != $C" >&2; exit 1; }
+          done
+          [ "$(jq -r .mcpName packaging/npm/package.json)" = "$(jq -r .name server.json)" ] || { echo "mcpName != server.json name" >&2; exit 1; }

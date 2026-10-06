@@ -4,7 +4,9 @@ name: Release
 #   1. cross-build cook-mcp binaries for mac/linux x64+arm64,
 #   2. publish them as GitHub release `vX.Y.Z` on this repo,
 #   3. publish npm wrapper @cookmd/mcp@X.Y.Z (postinstall downloads the
-#      matching binary from that release) and the @cookmd/nutrition-mcp shim.
+#      matching binary from that release) and the @cookmd/nutrition-mcp shim,
+#   4. publish server.json to the official MCP Registry (GitHub OIDC; the
+#      registry verifies the npm package's mcpName, so this runs last).
 # npm publishes via OIDC trusted publishing (no token). The trusted publisher
 # for BOTH @cookmd/mcp and @cookmd/nutrition-mcp on npmjs.com must point at
 # repo cook-md/cook-mcp, workflow release.yml (plan Task 18).
@@ -28,6 +30,14 @@ jobs:
           CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
           if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
             echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $CARGO_VERSION" >&2
+            exit 1
+          fi
+          # server.json is what the MCP Registry publish step reads; keep it
+          # locked to the same version so tags can't drift from it.
+          SERVER_VERSION="$(jq -r .version server.json)"
+          PKG_VERSION="$(jq -r '.packages[0].version' server.json)"
+          if [ "$SERVER_VERSION" != "$CARGO_VERSION" ] || [ "$PKG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "server.json version ($SERVER_VERSION / package $PKG_VERSION) does not match Cargo.toml version $CARGO_VERSION" >&2
             exit 1
           fi
 
@@ -145,3 +155,32 @@ jobs:
           npm view "@cookmd/nutrition-mcp@$VERSION" version >/dev/null 2>&1 && { echo "already published"; exit 0; }
           npm pkg set version="$VERSION" dependencies.@cookmd/mcp="$VERSION"
           npm publish --access public
+
+      - name: Publish to MCP Registry
+        # Must run after the npm publish above: the registry fetches
+        # @cookmd/mcp@VERSION and checks its mcpName matches server.json.
+        # Auth is GitHub OIDC for the io.github.cook-md/* namespace.
+        env:
+          MCP_PUBLISHER_VERSION: v1.8.1 # pinned: the version server.json was validated with
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NAME="$(jq -r .name server.json)"
+          # Skip if this version is already listed (e.g. re-run after a later failure).
+          if curl -fsS "https://registry.modelcontextprotocol.io/v0.1/servers?search=$NAME&version=$VERSION" \
+               | jq -e --arg n "$NAME" --arg v "$VERSION" \
+                   '[.servers[]? | (.server // .) | select(.name == $n and .version == $v)] | length > 0' >/dev/null; then
+            echo "$NAME@$VERSION already in the MCP Registry"
+            exit 0
+          fi
+          jq --arg v "$VERSION" '.version = $v | .packages[0].version = $v' server.json > server.json.tmp
+          mv server.json.tmp server.json
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" \
+            | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          # Tolerate a race / earlier partial run where the version exists already.
+          if ! OUT="$(./mcp-publisher publish 2>&1)"; then
+            echo "$OUT"
+            echo "$OUT" | grep -qiE 'already exists|duplicate version' && { echo "already published"; exit 0; }
+            exit 1
+          fi
+          echo "$OUT"
