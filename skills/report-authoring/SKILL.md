@@ -1,9 +1,11 @@
 ---
 name: report-authoring
-description: Use when the user wants to write or run a custom Jinja report template with render_report (a computed value, a custom summary or printout), or save a reusable report template. For nutrition use nutrition-reports.
+description: Use when the user wants to write or run a custom Jinja report template over a Cooklang recipe (.cook) or meal plan (.menu) with render_report - a computed value, a cost estimate, a custom summary or printout - or save a reusable report template. For nutrition use nutrition-reports; for a plain format conversion use export-recipe.
 ---
 
 # Skill: Report Authoring
+
+**Needs the Cook MCP server.** If tools like `render_report` and `write_config` are not available in this session, stop and tell the user to add the server: `claude mcp add cook -- npx -y @cookmd/mcp`, or the JSON config at https://github.com/cook-md/cook-mcp. Do not compute report values by hand instead.
 
 Author and run **Jinja2 report templates** over the user's recipes with the
 `render_report` tool — or reuse a saved one — then answer from the output or

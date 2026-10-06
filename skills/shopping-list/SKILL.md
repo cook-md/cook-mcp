@@ -1,9 +1,11 @@
 ---
 name: shopping-list
-description: Use when the user asks for a shopping or grocery list from recipes or a meal plan.
+description: Use when the user asks for a shopping or grocery list from Cooklang recipes (.cook) or a meal plan (.menu), or wants store-aisle grouping (config/aisle.conf) for their lists.
 ---
 
 # Skill: shopping-list
+
+**Needs the Cook MCP server.** If tools like `shopping_list` and `search_recipes` are not available in this session, stop and tell the user to add the server: `claude mcp add cook -- npx -y @cookmd/mcp`, or the JSON config at https://github.com/cook-md/cook-mcp. Never sum quantities by hand instead.
 
 Use when the user asks for a shopping or grocery list from recipes or a meal plan.
 

@@ -1,9 +1,11 @@
 ---
 name: cooklang-editing
-description: Use when creating, editing, scaling, or fixing .cook recipe files, or any change to ingredients, cookware, or steps. For metadata/frontmatter changes use the metadata skill. Not for meal plans (.menu) or importing from a URL/text.
+description: Use when writing a new Cooklang recipe or editing or fixing a .cook file - ingredients, cookware, timers, steps, sections, or resizing a recipe for good. For metadata/frontmatter changes use the metadata skill; to just show scaled amounts use scale-recipe. Not for meal plans (.menu) or importing from a URL/text.
 ---
 
 # Skill: cooklang-editing
+
+**Needs the Cook MCP server.** If tools like `read_recipe` and `validate` are not available in this session, stop and tell the user to add the server: `claude mcp add cook -- npx -y @cookmd/mcp`, or the JSON config at https://github.com/cook-md/cook-mcp. Do not write or save Cooklang without them.
 
 Use when creating, editing, scaling, or fixing .cook recipe files.
 

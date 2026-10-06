@@ -1,9 +1,11 @@
 ---
 name: nutrition-reports
-description: Use when the user wants a nutrition or dietitian-style evaluation (calories, macros, micronutrients, pass/fail checks against targets, exclusions/allergens, a meal plan's per-day nutrition), or wants to SCREEN recipes that already meet a number ("which of my recipes are over 35% protein?"). Not for changing a recipe or plan to hit targets - that is nutrition-goals.
+description: Use when the user wants a nutrition or dietitian-style evaluation of a Cooklang recipe (.cook) or meal plan (.menu) - calories, macros, micronutrients, pass/fail checks against targets, exclusions/allergens, a plan's per-day nutrition - or wants to SCREEN recipes that already meet a number ("which of my recipes are over 35% protein?"). Not for changing a recipe or plan to hit targets - that is nutrition-goals.
 ---
 
 # Skill: Nutrition Reports
+
+**Needs the Cook MCP server.** If tools like `render_report` and `read_recipe` are not available in this session, stop and tell the user to add the server: `claude mcp add cook -- npx -y @cookmd/mcp`, or the JSON config at https://github.com/cook-md/cook-mcp. Never estimate nutrition from your own knowledge instead.
 
 Use when the user wants a **nutrition or dietitian-style evaluation** of a recipe or
 meal plan — calories/macros/micronutrients, pass/fail checks against targets, exclusions

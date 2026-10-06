@@ -1,9 +1,11 @@
 ---
 name: pantry
-description: Use when the user asks about pantry or inventory tracking, what they have in stock, what is expiring, or what they can cook with what they have.
+description: Use when the user asks about pantry or inventory tracking for their Cooklang collection (config/pantry.conf) - what they have in stock, what is expiring or running low, updating stock after shopping or cooking, or what they can cook with what they have.
 ---
 
 # Skill: pantry
+
+**Needs the Cook MCP server.** If tools like `pantry_list` and `pantry_update` are not available in this session, stop and tell the user to add the server: `claude mcp add cook -- npx -y @cookmd/mcp`, or the JSON config at https://github.com/cook-md/cook-mcp. Do not guess what is in stock or edit the file by hand instead.
 
 Use when the user asks about pantry or inventory tracking.
 

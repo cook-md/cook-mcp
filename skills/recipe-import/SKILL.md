@@ -1,9 +1,11 @@
 ---
 name: recipe-import
-description: Use when bringing a recipe in from a URL, photos, or pasted text. Triggers - "import", "convert this", a pasted recipe, a link, a photo of a cookbook page. Not for editing an existing local recipe.
+description: Use when bringing a recipe into the Cooklang collection from a URL, photos, or pasted text and saving it as a .cook file. Triggers - "import", "convert this to Cooklang", a pasted recipe, a link, a photo of a cookbook page. Not for editing an existing local recipe.
 ---
 
 # Skill: recipe-import
+
+**Needs the Cook MCP server.** If tools like `import_recipe` and `validate` are not available in this session, stop and tell the user to add the server: `claude mcp add cook -- npx -y @cookmd/mcp`, or the JSON config at https://github.com/cook-md/cook-mcp. Do not copy a recipe out of a page by hand without them.
 
 Use when bringing a recipe in from a URL, photos, or pasted text.
 

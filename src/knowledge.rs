@@ -352,6 +352,27 @@ mod tests {
                 s.name
             );
             assert!(d.len() <= 1024, "{}: description too long", s.name);
+            // Plain YAML scalar: `: ` or ` #` would break the frontmatter for
+            // Claude Code's YAML parser (our own reader is line-based).
+            assert!(
+                !d.contains(": ") && !d.contains(" #"),
+                "{}: description must be a plain YAML scalar",
+                s.name
+            );
+        }
+    }
+
+    /// As a Claude Code plugin skill, a skill can load without the server.
+    /// Each one says how to add it instead of guessing.
+    #[test]
+    fn skills_say_how_to_add_the_server() {
+        for s in SKILLS {
+            assert!(
+                s.body.contains("claude mcp add cook -- npx -y @cookmd/mcp")
+                    && s.body.contains("https://github.com/cook-md/cook-mcp"),
+                "skill {} lacks the add-the-server line",
+                s.name
+            );
         }
     }
 

@@ -1,9 +1,11 @@
 ---
 name: nutrition-goals
-description: Use when the user wants to change AN EXISTING recipe or plan so it hits numeric nutrition targets ("make this 600 kcal per serving", "get my week to 150 g protein a day", "more protein, same calories"). Measures with the Cook nutrition service, edits, and verifies. Not for evaluation-only questions (nutrition-reports), and not for picking or screening recipes that already meet a number (nutrition-reports screening, then meal-planning).
+description: Use when the user wants to change AN EXISTING Cooklang recipe (.cook) or meal plan (.menu) so it hits numeric nutrition targets ("make this 600 kcal per serving", "get my week to 150 g protein a day", "more protein, same calories"). Measures with the Cook nutrition service, edits, and verifies. Not for evaluation-only questions (nutrition-reports), and not for picking or screening recipes that already meet a number (nutrition-reports screening, then meal-planning).
 ---
 
 # Skill: Nutrition Goals
+
+**Needs the Cook MCP server.** If tools like `render_report` and `validate` are not available in this session, stop and tell the user to add the server: `claude mcp add cook -- npx -y @cookmd/mcp`, or the JSON config at https://github.com/cook-md/cook-mcp. Never estimate nutrition from your own knowledge instead.
 
 Use when the user wants to **change** a recipe or meal plan so it hits numeric
 nutrition targets — "make this 600 kcal per serving", "get my week to 150 g

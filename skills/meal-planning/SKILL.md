@@ -1,9 +1,11 @@
 ---
 name: meal-planning
-description: Use when building or editing a .menu file, weekly plans, multi-day menus, or matching servings across days. Not for a single recipe. With a numeric nutrition target ("35% protein", "1800 kcal/day"), screen candidates with nutrition-reports first, then build the plan here; nutrition-goals is only for changing an already-chosen recipe to hit a number.
+description: Use when building or editing a Cooklang meal plan (.menu file), weekly plans, multi-day menus, or matching servings across days. Not for a single recipe. With a numeric nutrition target ("35% protein", "1800 kcal/day"), screen candidates with nutrition-reports first, then build the plan here; nutrition-goals is only for changing an already-chosen recipe to hit a number.
 ---
 
 # Skill: meal-planning
+
+**Needs the Cook MCP server.** If tools like `list_recipes` and `write_menu` are not available in this session, stop and tell the user to add the server: `claude mcp add cook -- npx -y @cookmd/mcp`, or the JSON config at https://github.com/cook-md/cook-mcp. Do not plan from recipes you have not seen in the collection.
 
 Use when building or editing a .menu file or a multi-day meal plan. The file format is in the `cooklang://menu-format` resource.
 

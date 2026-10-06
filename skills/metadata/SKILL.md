@@ -1,9 +1,11 @@
 ---
 name: metadata
-description: Use when adding, normalizing, or fixing YAML frontmatter (title, tags, source, servings/yield, times, diet, locale, images), including bulk metadata changes across a library.
+description: Use when adding, normalizing, or fixing YAML frontmatter in Cooklang .cook recipes or .menu plans (title, tags, source, servings/yield, times, diet, locale, images), including converting old >> metadata lines and bulk metadata changes across a library.
 ---
 
 # Skill: metadata
+
+**Needs the Cook MCP server.** If tools like `read_recipe` and `write_recipe` are not available in this session, stop and tell the user to add the server: `claude mcp add cook -- npx -y @cookmd/mcp`, or the JSON config at https://github.com/cook-md/cook-mcp. Do not rewrite files without them.
 
 Use when adding, normalizing, or fixing recipe/menu metadata (YAML frontmatter): titles, tags, source/author, servings/yield, times, diet, locale, images, or bulk metadata changes across a library.
 
