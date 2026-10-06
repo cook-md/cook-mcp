@@ -27,8 +27,10 @@ jobs:
           (cd packaging/npm-shim && npm pack --dry-run)
       - name: Validate server.json (MCP Registry schema)
         run: |
-          pip install --quiet jsonschema
-          python3 - <<'EOF'
+          # Ubuntu's system jsonschema predates Draft 2020-12; use a venv.
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet 'jsonschema>=4.18'
+          "$RUNNER_TEMP/venv/bin/python" - <<'EOF'
           import json, urllib.request, jsonschema
           d = json.load(open("server.json"))
           s = json.load(urllib.request.urlopen(d["$schema"]))
