@@ -59,7 +59,7 @@ macro_rules! skill {
     ($n:literal) => {
         Skill {
             name: $n,
-            body: include_str!(concat!("../skills/", $n, ".md")),
+            body: include_str!(concat!("../skills/", $n, "/SKILL.md")),
         }
     };
 }

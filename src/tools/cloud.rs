@@ -1187,13 +1187,13 @@ mod tests {
         assert!(out.ends_with("|3.5"), "datastore not wired: {out}");
     }
 
-    /// The cost example in skills/report-authoring.md must keep rendering.
+    /// The cost example in skills/report-authoring/SKILL.md must keep rendering.
     #[tokio::test(flavor = "multi_thread")]
     async fn report_authoring_skill_cost_example_renders() {
         let (_d, ws) = crate::test_support::fixture_workspace();
         std::fs::create_dir_all(ws.root().join("db/eggs")).unwrap();
         std::fs::write(ws.root().join("db/eggs/shopping.yml"), "price: 3.5\n").unwrap();
-        let skill = include_str!("../../skills/report-authoring.md");
+        let skill = include_str!("../../skills/report-authoring/SKILL.md");
         let start = skill.find("{% set ns = namespace(total=0) %}").unwrap();
         let end = start + skill[start..].find("```").unwrap();
         let s = CookMcp::new(crate::config::Config::from_vars(|_| None), ws);
