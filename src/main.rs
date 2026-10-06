@@ -3,6 +3,7 @@ mod auth;
 mod config;
 mod knowledge;
 mod render;
+mod roots;
 mod server;
 mod test_support;
 mod tools;
