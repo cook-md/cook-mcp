@@ -30,6 +30,38 @@ Supported platforms: macOS (arm64, x64) and Linux (x64, arm64, glibc 2.35 or new
 
 Setup notes for specific clients: https://cook.md/help/mcp
 
+## Claude Code plugin
+
+Claude Code users can install the `cooklang` plugin instead of adding the server by hand. It lives in [cooklang/cooklang-skills](https://github.com/cooklang/cooklang-skills) and bundles this server plus the skills below:
+
+```
+/plugin marketplace add cooklang/cooklang-skills
+/plugin install cooklang@cooklang-skills
+```
+
+The plugin starts the server with your Claude Code project folder as the recipe root, and Claude Code picks the right skill from what you ask ("plan dinners for next week", "is this recipe valid?"). If you already added the server with `claude mcp add cook`, remove that entry so you don't run two copies.
+
+The skills (also served by this server as `cooklang://skills/<name>` resources):
+
+| Skill | Use it for |
+|-------|------------|
+| `cooklang-editing` | Write a new recipe or edit and fix a `.cook` file |
+| `cooklang-validation` | Check recipes, a folder or the whole collection for errors and broken references |
+| `metadata` | Add or fix YAML frontmatter (title, tags, servings, times), including bulk changes |
+| `recipe-import` | Import a recipe from a URL, photos or pasted text |
+| `recipe-search` | Find recipes by ingredient, tag, cuisine, course or a remembered phrase |
+| `scale-recipe` | Show a recipe for more or fewer servings |
+| `export-recipe` | Turn a recipe into Markdown, JSON, plain text or HTML |
+| `organize-collection` | Folder layout, metadata audit, aisle and pantry config, whole-library checks |
+| `meal-planning` | Build or edit a `.menu` meal plan |
+| `shopping-list` | Shopping lists from recipes or plans, grouped by aisle, minus the pantry |
+| `pantry` | Track stock, expiry and low items; what can I cook with what I have |
+| `report-authoring` | Custom Jinja reports and printouts with `render_report` |
+| `nutrition-reports` | Nutrition evaluation and screening (Cook Basic or Pro) |
+| `nutrition-goals` | Change a recipe or plan to hit nutrition targets (Cook Basic or Pro) |
+
+`skills/` in this repo is the canonical copy; the plugin repo syncs from it. Each skill is `skills/<name>/SKILL.md`.
+
 ## Tools
 
 ### Free (local, no login)
@@ -70,14 +102,14 @@ Setup notes for specific clients: https://cook.md/help/mcp
 
 ## Prompts and resources
 
-Prompts: `meal-planning`, `shopping-list`, `pantry`, `import-recipe`, `edit-recipe`, `nutrition-report`, `nutrition-goals`.
+Prompts: `meal-planning`, `shopping-list`, `pantry`, `import-recipe`, `edit-recipe`, `nutrition-report`, `nutrition-goals`, `scale-recipe`.
 
 Resources:
 
 - `cooklang://spec`: the Cooklang specification
 - `cooklang://syntax`: a syntax reference
 - `cooklang://menu-format`: the `.menu` meal plan format
-- `cooklang://skills/<name>`: working guides for the agent: `cooklang-editing`, `cooklang-validation`, `meal-planning`, `metadata`, `nutrition-goals`, `nutrition-reports`, `pantry`, `recipe-import`, `report-authoring`, `shopping-list`
+- `cooklang://skills/<name>`: working guides for the agent, one per skill in [the table above](#claude-code-plugin): `cooklang-editing`, `cooklang-validation`, `export-recipe`, `meal-planning`, `metadata`, `nutrition-goals`, `nutrition-reports`, `organize-collection`, `pantry`, `recipe-import`, `recipe-search`, `report-authoring`, `scale-recipe`, `shopping-list`
 
 ## Safety
 
