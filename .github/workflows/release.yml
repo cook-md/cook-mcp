@@ -176,6 +176,12 @@ jobs:
           mv server.json.tmp server.json
           curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" \
             | tar xz mcp-publisher
+          # The registry checks the npm package; a fresh publish takes a few
+          # minutes to become visible, so wait for it instead of failing.
+          for i in $(seq 1 30); do
+            npm view "@cookmd/mcp@$VERSION" version >/dev/null 2>&1 && break
+            echo "waiting for @cookmd/mcp@$VERSION on npm ($i/30)"; sleep 20
+          done
           ./mcp-publisher login github-oidc
           # Tolerate a race / earlier partial run where the version exists already.
           if ! OUT="$(./mcp-publisher publish 2>&1)"; then
