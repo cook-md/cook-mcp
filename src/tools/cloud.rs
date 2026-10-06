@@ -309,10 +309,10 @@ impl CookMcp {
         Parameters(a): Parameters<RenderReportArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         use crate::render::{InputKind, RenderRequest, Source};
-        if let Some(e) = self.unset_guard() {
-            return Ok(e);
-        }
-        let ws = &self.workspace;
+        let ws = match self.local_workspace().await {
+            Ok(ws) => ws,
+            Err(e) => return Ok(e),
+        };
         let resolve = |p: String| ws.resolve(&p).map(|full| full.into_std_path_buf());
         let template = match (a.template, a.template_path) {
             (Some(t), None) => Source::Inline(t),
@@ -483,19 +483,18 @@ impl CookMcp {
         Parameters(a): Parameters<ImportArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         use base64::Engine as _;
-        if a.image_paths.is_some()
-            && let Some(e) = self.unset_guard()
-        {
-            return Ok(e);
-        }
         let (route, body) = match (a.url, a.image_paths, a.text) {
             (Some(url), None, None) => ("/api/cookify/url", serde_json::json!({ "url": url })),
             (None, None, Some(text)) => ("/api/cookify/text", serde_json::json!({ "text": text })),
             (None, Some(paths), None) if !paths.is_empty() && paths.len() <= 10 => {
+                let ws = match self.local_workspace().await {
+                    Ok(ws) => ws,
+                    Err(e) => return Ok(e),
+                };
                 let mut images = Vec::with_capacity(paths.len());
                 let mut total: u64 = 0;
                 for p in &paths {
-                    let full = match self.workspace.resolve(p) {
+                    let full = match ws.resolve(p) {
                         Ok(f) => f,
                         Err(e) => return Ok(super::workspace_err(e)),
                     };
@@ -577,11 +576,13 @@ impl CookMcp {
             false
         };
         status["authenticated"] = authenticated.into();
-        if self.workspace.is_unset() {
+        let ws = self.workspace().await;
+        status["recipe_root_source"] = serde_json::json!(ws.source());
+        if ws.is_unset() {
             status["recipe_root"] = serde_json::Value::Null;
             status["recipe_root_hint"] = crate::workspace::UNSET_HINT.into();
         } else {
-            status["recipe_root"] = self.workspace.root().as_str().into();
+            status["recipe_root"] = ws.root().as_str().into();
         }
         if probe_subscription {
             match self.api.cookmd_get("/api/entitlements").await {
@@ -673,9 +674,7 @@ mod tests {
     #[tokio::test]
     async fn unset_workspace_guards_local_cloud_tools_and_auth_status_reports_it() {
         let mut s = server_for("http://127.0.0.1:1");
-        let mut ws = (*s.workspace).clone();
-        ws.set_unset_for_test();
-        s.workspace = std::sync::Arc::new(ws);
+        s.set_unset_for_test();
         let r = s.auth_status().await.unwrap();
         assert!(text_of(&r).contains("\"recipe_root\": null"));
         assert!(text_of(&r).contains("COOK_RECIPES_DIR"));
@@ -704,9 +703,7 @@ mod tests {
             .mount(&mock)
             .await;
         let mut s = server_for(&mock.uri());
-        let mut ws = (*s.workspace).clone();
-        ws.set_unset_for_test();
-        s.workspace = std::sync::Arc::new(ws);
+        s.set_unset_for_test();
         let r = s
             .get_nutrition(Parameters(GetNutritionArgs {
                 ingredient: "salmon".into(),

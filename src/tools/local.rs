@@ -155,10 +155,10 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<ListArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Some(e) = self.unset_guard() {
-            return Ok(e);
-        }
-        let ws = &self.workspace;
+        let ws = match self.local_workspace().await {
+            Ok(ws) => ws,
+            Err(e) => return Ok(e),
+        };
         let dir = match a.dir.as_deref() {
             None | Some("") | Some(".") => ws.root().to_owned(),
             Some(d) => match ws.resolve(d) {
@@ -180,7 +180,7 @@ impl CookMcp {
             crate::workspace::TEMPLATE_DIRS
                 .iter()
                 .map(|d| ws.root().join(d))
-                .filter(|d| d.is_dir() && is_plain(ws, d))
+                .filter(|d| d.is_dir() && is_plain(&ws, d))
                 .try_for_each(|d| walk_ext(&d, &["jinja"], &mut files).map_err(|e| (d.clone(), e)))
         } else {
             walk(&dir, &mut files).map_err(|e| (dir.clone(), e))
@@ -203,7 +203,7 @@ impl CookMcp {
                     Some("jinja") => "template",
                     _ => "recipe",
                 };
-                serde_json::json!({ "path": rel(ws, p), "kind": kind })
+                serde_json::json!({ "path": rel(&ws, p), "kind": kind })
             })
             .collect();
         recipes.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
@@ -220,10 +220,10 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<ReadArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Some(e) = self.unset_guard() {
-            return Ok(e);
-        }
-        let ws = &self.workspace;
+        let ws = match self.local_workspace().await {
+            Ok(ws) => ws,
+            Err(e) => return Ok(e),
+        };
         let scale = a.scale.unwrap_or(1.0);
         if !valid_scale(scale) {
             return Ok(text_err("scale must be a positive number"));
@@ -250,7 +250,7 @@ impl CookMcp {
                     .as_ref()
                     .and_then(|p| std::fs::read_to_string(ws.root().join(p)).ok());
                 Ok(json_ok(&serde_json::json!({
-                    "path": path.as_deref().map(|p| rel(ws, p)),
+                    "path": path.as_deref().map(|p| rel(&ws, p)),
                     "title": outcome.value.title,
                     "source": source,
                     "recipe": outcome.value.recipe,
@@ -268,10 +268,10 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<SearchArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Some(e) = self.unset_guard() {
-            return Ok(e);
-        }
-        let ws = &self.workspace;
+        let ws = match self.local_workspace().await {
+            Ok(ws) => ws,
+            Err(e) => return Ok(e),
+        };
         let tag = a.tag.as_deref().map(str::to_lowercase);
         let candidates: Vec<(String, Option<String>)> = if a.query.trim().is_empty() {
             if tag.is_none() {
@@ -279,7 +279,7 @@ impl CookMcp {
             }
             let mut files = Vec::new();
             let _ = walk(ws.root(), &mut files);
-            files.iter().map(|p| (rel(ws, p), None)).collect()
+            files.iter().map(|p| (rel(&ws, p), None)).collect()
         } else {
             match search::search(
                 &ws.context(),
@@ -298,7 +298,7 @@ impl CookMcp {
         };
         let mut hits: Vec<serde_json::Value> = candidates
             .into_iter()
-            .filter(|(p, _)| is_plain(ws, &ws.root().join(p)))
+            .filter(|(p, _)| is_plain(&ws, &ws.root().join(p)))
             .filter(|(p, _)| {
                 tag.as_ref()
                     .is_none_or(|t| tags_of(&ws.root().join(p)).contains(t))
@@ -321,11 +321,11 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<ValidateArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Some(e) = self.unset_guard() {
-            return Ok(e);
-        }
+        let ws = match self.local_workspace().await {
+            Ok(ws) => ws,
+            Err(e) => return Ok(e),
+        };
         use cookcli_core::doctor;
-        let ws = &self.workspace;
         if let Some(content) = a.content {
             let as_path = a.as_path.unwrap_or_else(|| "Untitled.cook".into());
             let rel_path = match ws.relative(&as_path) {
@@ -397,7 +397,7 @@ impl CookMcp {
         let plain: Vec<&_> = report
             .recipes
             .iter()
-            .filter(|r| is_plain(ws, &scanned_from.join(&r.path)))
+            .filter(|r| is_plain(&ws, &scanned_from.join(&r.path)))
             .collect();
         let total = plain.len();
         let with_errors = plain
@@ -451,19 +451,17 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<WriteArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Some(e) = self.unset_guard() {
-            return Ok(e);
-        }
+        let ws = match self.local_workspace().await {
+            Ok(ws) => ws,
+            Err(e) => return Ok(e),
+        };
         if !a.path.ends_with(".cook") {
             return Ok(text_err(
                 "write_recipe writes .cook files; use write_menu for .menu plans",
             ));
         }
         Ok(
-            match self
-                .workspace
-                .write(&a.path, &a.content, a.force.unwrap_or(false))
-            {
+            match ws.write(&a.path, &a.content, a.force.unwrap_or(false)) {
                 Ok(report) => json_ok(&report),
                 Err(e) => workspace_err(e),
             },
@@ -479,19 +477,17 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<WriteArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Some(e) = self.unset_guard() {
-            return Ok(e);
-        }
+        let ws = match self.local_workspace().await {
+            Ok(ws) => ws,
+            Err(e) => return Ok(e),
+        };
         if !a.path.ends_with(".menu") {
             return Ok(text_err(
                 "write_menu writes .menu files; use write_recipe for .cook recipes",
             ));
         }
         Ok(
-            match self
-                .workspace
-                .write(&a.path, &a.content, a.force.unwrap_or(false))
-            {
+            match ws.write(&a.path, &a.content, a.force.unwrap_or(false)) {
                 Ok(report) => json_ok(&report),
                 Err(e) => workspace_err(e),
             },
@@ -509,10 +505,11 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<WriteConfigArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Some(e) = self.unset_guard() {
-            return Ok(e);
-        }
-        Ok(match self.workspace.write_config(&a.path, &a.content) {
+        let ws = match self.local_workspace().await {
+            Ok(ws) => ws,
+            Err(e) => return Ok(e),
+        };
+        Ok(match ws.write_config(&a.path, &a.content) {
             Ok(report) => json_ok(&report),
             Err(e) => workspace_err(e),
         })
@@ -527,11 +524,11 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<ShoppingArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Some(e) = self.unset_guard() {
-            return Ok(e);
-        }
+        let ws = match self.local_workspace().await {
+            Ok(ws) => ws,
+            Err(e) => return Ok(e),
+        };
         use cookcli_core::shopping_list::{self, GenerateRequest, ScaledRecipe};
-        let ws = &self.workspace;
         if a.recipes.is_empty() {
             return Ok(text_err(
                 "`recipes` is empty: list at least one recipe or .menu",

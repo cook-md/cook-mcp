@@ -24,12 +24,17 @@ pub(crate) fn text_err(msg: impl Into<String>) -> CallToolResult {
 }
 
 impl crate::server::CookMcp {
-    /// `Some(error)` when no recipe folder is configured; local tools return it
-    /// as their result instead of touching the filesystem.
-    pub(crate) fn unset_guard(&self) -> Option<CallToolResult> {
-        self.workspace
-            .is_unset()
-            .then(|| text_err(crate::workspace::UNSET_HINT))
+    /// The recipe root for a local tool, or the error it returns instead of
+    /// touching the filesystem when no recipe folder is set.
+    pub(crate) async fn local_workspace(
+        &self,
+    ) -> Result<std::sync::Arc<crate::workspace::Workspace>, CallToolResult> {
+        let ws = self.workspace().await;
+        if ws.is_unset() {
+            Err(text_err(crate::workspace::UNSET_HINT))
+        } else {
+            Ok(ws)
+        }
     }
 }
 

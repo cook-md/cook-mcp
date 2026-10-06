@@ -78,14 +78,12 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<PantryListArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Some(e) = self.unset_guard() {
-            return Ok(e);
-        }
+        let ws = match self.local_workspace().await {
+            Ok(ws) => ws,
+            Err(e) => return Ok(e),
+        };
         Ok(
-            match pantry::list(
-                &self.workspace.context(),
-                pantry::ListRequest { section: a.section },
-            ) {
+            match pantry::list(&ws.context(), pantry::ListRequest { section: a.section }) {
                 Err(e) => core_err(e),
                 Ok(o) => json_ok(&serde_json::json!({
                     "sections": o.value.sections.iter().map(|s| serde_json::json!({
@@ -105,14 +103,15 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<ExpiringArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Some(e) = self.unset_guard() {
-            return Ok(e);
-        }
+        let ws = match self.local_workspace().await {
+            Ok(ws) => ws,
+            Err(e) => return Ok(e),
+        };
         let req = pantry::ExpiringRequest {
             days: a.days.unwrap_or(7),
             include_unknown: false,
         };
-        Ok(match pantry::expiring(&self.workspace.context(), req) {
+        Ok(match pantry::expiring(&ws.context(), req) {
             Err(e) => core_err(e),
             Ok(o) => json_ok(&serde_json::json!({
                 "items": o.value.iter().map(|e| serde_json::json!({
@@ -125,14 +124,12 @@ impl CookMcp {
 
     #[tool(description = "Pantry items at or below their low-stock threshold.")]
     async fn pantry_depleted(&self) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Some(e) = self.unset_guard() {
-            return Ok(e);
-        }
+        let ws = match self.local_workspace().await {
+            Ok(ws) => ws,
+            Err(e) => return Ok(e),
+        };
         Ok(
-            match pantry::depleted(
-                &self.workspace.context(),
-                pantry::DepletedRequest { all: false },
-            ) {
+            match pantry::depleted(&ws.context(), pantry::DepletedRequest { all: false }) {
                 Err(e) => core_err(e),
                 Ok(o) => json_ok(&serde_json::json!({
                     "items": o.value.iter().map(item_json).collect::<Vec<_>>(),
@@ -150,13 +147,14 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<PantryRecipesArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Some(e) = self.unset_guard() {
-            return Ok(e);
-        }
+        let ws = match self.local_workspace().await {
+            Ok(ws) => ws,
+            Err(e) => return Ok(e),
+        };
         let req = pantry::RecipesRequest {
             threshold: a.threshold.unwrap_or(50),
         };
-        Ok(match pantry::recipes(&self.workspace.context(), req) {
+        Ok(match pantry::recipes(&ws.context(), req) {
             Err(e) => core_err(e),
             Ok(o) => json_ok(&serde_json::json!({
                 "full": o.value.full,
@@ -176,11 +174,12 @@ impl CookMcp {
         &self,
         Parameters(a): Parameters<PantryUpdateArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Some(e) = self.unset_guard() {
-            return Ok(e);
-        }
-        let ctx = self.workspace.context();
-        if !pantry_in_root(&ctx, self.workspace.root()) {
+        let ws = match self.local_workspace().await {
+            Ok(ws) => ws,
+            Err(e) => return Ok(e),
+        };
+        let ctx = ws.context();
+        if !pantry_in_root(&ctx, ws.root()) {
             return Ok(text_err(
                 "No pantry in the recipe folder. Writes only touch <recipe root>/config/pantry.conf \
                  (a global pantry, if any, is never modified): create it first with write_config \

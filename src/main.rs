@@ -25,7 +25,11 @@ async fn main() -> anyhow::Result<()> {
     match std::env::args().nth(1).as_deref() {
         None | Some("serve") => {
             let workspace = workspace::Workspace::from_config(&cfg)?;
-            tracing::info!("recipe root: {}", workspace.root());
+            tracing::info!(
+                "recipe root: {} ({:?})",
+                workspace.root(),
+                workspace.source()
+            );
             let service = server::CookMcp::new(cfg, workspace).serve(stdio()).await?;
             service.waiting().await?;
         }
