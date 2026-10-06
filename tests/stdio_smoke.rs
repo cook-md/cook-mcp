@@ -114,6 +114,7 @@ fn initialize_and_list_tools_over_stdio() {
         "edit-recipe",
         "nutrition-report",
         "nutrition-goals",
+        "scale-recipe",
     ] {
         assert!(prompts.contains(&expected), "prompts were: {prompts:?}");
     }
@@ -136,9 +137,15 @@ fn initialize_and_list_tools_over_stdio() {
         "cooklang://syntax",
         "cooklang://menu-format",
         "cooklang://skills/meal-planning",
+        "cooklang://skills/scale-recipe",
+        "cooklang://skills/export-recipe",
+        "cooklang://skills/organize-collection",
+        "cooklang://skills/recipe-search",
     ] {
         assert!(uris.contains(&expected), "resources were: {uris:?}");
     }
+    // 3 docs + 14 skills.
+    assert_eq!(uris.len(), 17, "resources were: {uris:?}");
 
     writeln!(
         stdin,

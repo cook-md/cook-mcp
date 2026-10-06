@@ -75,6 +75,10 @@ pub const SKILLS: &[Skill] = &[
     skill!("nutrition-reports"),
     skill!("nutrition-goals"),
     skill!("metadata"),
+    skill!("scale-recipe"),
+    skill!("recipe-search"),
+    skill!("export-recipe"),
+    skill!("organize-collection"),
 ];
 
 pub fn read(uri: &str) -> Option<&'static str> {
@@ -181,6 +185,14 @@ impl CookMcp {
     )]
     async fn nutrition_goals_prompt(&self) -> Vec<PromptMessage> {
         prompt_body("nutrition-goals")
+    }
+
+    #[prompt(
+        name = "scale-recipe",
+        description = "Show a recipe scaled to more or fewer servings"
+    )]
+    async fn scale_recipe_prompt(&self) -> Vec<PromptMessage> {
+        prompt_body("scale-recipe")
     }
 }
 
@@ -296,6 +308,50 @@ mod tests {
             for key in ["attach_syntax_reference", "order:"] {
                 assert!(!s.body.contains(key), "skill {} keeps `{key}`", s.name);
             }
+        }
+    }
+
+    /// Claude Code loads every `skills/<name>/SKILL.md` as a plugin skill; the
+    /// MCP server serves only what `SKILLS` registers. Keep the two the same.
+    #[test]
+    fn every_skill_dir_is_registered() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skills");
+        let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.join("SKILL.md").is_file())
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        on_disk.sort();
+        let mut registered: Vec<String> = SKILLS.iter().map(|s| s.name.to_string()).collect();
+        registered.sort();
+        assert_eq!(on_disk, registered);
+        assert_eq!(SKILLS.len(), 14);
+    }
+
+    /// Plugin skill names: lowercase, digits and hyphens, at most 64 chars, no
+    /// reserved words. Descriptions are auto-invocation triggers.
+    #[test]
+    fn skills_are_valid_plugin_skills() {
+        for s in SKILLS {
+            assert!(
+                s.name.len() <= 64
+                    && s.name
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+                "bad skill name {}",
+                s.name
+            );
+            for reserved in ["claude", "anthropic"] {
+                assert!(!s.name.contains(reserved), "reserved word in {}", s.name);
+            }
+            let d = s.description().unwrap_or_default();
+            assert!(
+                d.starts_with("Use when"),
+                "{}: description should start with \"Use when\"",
+                s.name
+            );
+            assert!(d.len() <= 1024, "{}: description too long", s.name);
         }
     }
 
