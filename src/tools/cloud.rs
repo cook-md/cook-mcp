@@ -580,7 +580,7 @@ impl CookMcp {
         status["recipe_root_source"] = serde_json::json!(ws.source());
         if ws.is_unset() {
             status["recipe_root"] = serde_json::Value::Null;
-            status["recipe_root_hint"] = crate::workspace::UNSET_HINT.into();
+            status["recipe_root_hint"] = ws.unset_hint().into();
         } else {
             status["recipe_root"] = ws.root().as_str().into();
         }

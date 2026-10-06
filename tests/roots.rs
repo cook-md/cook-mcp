@@ -14,10 +14,16 @@ struct Client {
     /// Answer to the server's `roots/list` requests; `None` = never asked.
     roots: Vec<String>,
     roots_requests: usize,
+    /// `false` = never answer `roots/list` (a hung client).
+    answer_roots: bool,
 }
 
 impl Client {
     fn spawn(cwd: &Path, capabilities: Value) -> Self {
+        Self::spawn_with(cwd, capabilities, &[])
+    }
+
+    fn spawn_with(cwd: &Path, capabilities: Value, envs: &[(&str, &Path)]) -> Self {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_cook-mcp"));
         cmd.current_dir(cwd)
             .env_remove("COOK_RECIPES_DIR")
@@ -28,6 +34,7 @@ impl Client {
         for k in ["CLAUDE_PLUGIN_ROOT", "CURSOR_PLUGIN_ROOT", "PLUGIN_ROOT"] {
             cmd.env_remove(k);
         }
+        cmd.envs(envs.iter().map(|(k, v)| (k, v)));
         let mut child = cmd.spawn().expect("spawn server");
         let stdin = child.stdin.take().unwrap();
         let lines = BufReader::new(child.stdout.take().unwrap()).lines();
@@ -37,6 +44,7 @@ impl Client {
             lines,
             roots: vec![],
             roots_requests: 0,
+            answer_roots: true,
         };
         c.send(json!({
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -60,6 +68,9 @@ impl Client {
                 serde_json::from_str(&self.lines.next().expect("server closed").unwrap()).unwrap();
             if msg["method"] == "roots/list" {
                 self.roots_requests += 1;
+                if !self.answer_roots {
+                    continue;
+                }
                 let roots: Vec<Value> = self.roots.iter().map(|u| json!({"uri": u})).collect();
                 let id = msg["id"].clone();
                 self.send(json!({"jsonrpc": "2.0", "id": id, "result": {"roots": roots}}));
@@ -179,4 +190,96 @@ fn plugin_install_folder_is_not_a_recipe_folder() {
     assert!(text(&r).contains("Mine.cook"), "{r}");
     let status: Value = serde_json::from_str(&text(&c.call(3, "auth_status"))).unwrap();
     assert_eq!(status["recipe_root_source"], "cwd");
+}
+
+#[cfg(unix)]
+#[test]
+fn env_wins_even_when_the_client_advertises_roots() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env_dir = tmp.path().join("env");
+    let root_dir = tmp.path().join("client");
+    collection(&env_dir, "FromEnv.cook");
+    collection(&root_dir, "FromRoots.cook");
+    let mut c = Client::spawn_with(
+        Path::new("/"),
+        json!({"roots": {"listChanged": true}}),
+        &[("COOK_RECIPES_DIR", env_dir.as_path())],
+    );
+    c.roots = vec![uri(&root_dir)];
+    let r = c.call(2, "list_recipes");
+    assert!(text(&r).contains("FromEnv.cook"), "{r}");
+    c.send(json!({"jsonrpc": "2.0", "method": "notifications/roots/list_changed"}));
+    let r = c.call(3, "list_recipes");
+    assert!(text(&r).contains("FromEnv.cook"), "{r}");
+    assert_eq!(c.roots_requests, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn client_that_never_answers_roots_falls_back_within_the_timeout() {
+    let tmp = tempfile::tempdir().unwrap();
+    let proj = tmp.path().join("proj");
+    collection(&proj, "Mine.cook");
+    let mut c = Client::spawn(&proj, json!({"roots": {}}));
+    c.answer_roots = false;
+    let start = std::time::Instant::now();
+    let r = c.call(2, "list_recipes");
+    assert!(start.elapsed() < std::time::Duration::from_secs(8));
+    assert!(text(&r).contains("Mine.cook"), "{r}");
+    assert_eq!(c.roots_requests, 1);
+    // Backoff: not asked again right away.
+    c.call(3, "list_recipes");
+    assert_eq!(c.roots_requests, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_root_that_is_home_is_rejected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("Stray.cook"), "Boil @water{1%l}.\n").unwrap();
+    let mut c = Client::spawn_with(
+        Path::new("/"),
+        json!({"roots": {}}),
+        &[("HOME", home.as_path())],
+    );
+    c.roots = vec![uri(&home)];
+    let r = c.call(2, "list_recipes");
+    assert_eq!(r["isError"], true, "{r}");
+    let t = text(&r);
+    assert!(t.contains("No recipe folder set"), "{r}");
+    assert!(t.contains("filesystem root"), "{r}");
+    assert!(t.contains("no usable workspace roots"), "{r}");
+    assert!(t.contains("COOK_RECIPES_DIR"), "{r}");
+}
+
+#[cfg(unix)]
+#[test]
+fn file_localhost_root_works_end_to_end() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("My Recipes");
+    collection(&dir, "Local.cook");
+    let mut c = Client::spawn(Path::new("/"), json!({"roots": {}}));
+    c.roots = vec![uri(&dir).replace("file://", "file://localhost")];
+    let r = c.call(2, "list_recipes");
+    assert!(text(&r).contains("Local.cook"), "{r}");
+}
+
+#[cfg(unix)]
+#[test]
+fn root_that_is_a_plugin_source_tree_is_accepted_but_not_as_cwd() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("plugin-src");
+    collection(&dir, "Dev.cook");
+    std::fs::create_dir_all(dir.join(".claude-plugin")).unwrap();
+    std::fs::write(dir.join(".claude-plugin/plugin.json"), "{}").unwrap();
+    let mut c = Client::spawn(&dir, json!({}));
+    let r = c.call(2, "list_recipes");
+    assert_eq!(r["isError"], true, "{r}");
+    assert!(text(&r).contains("plugin install folder"), "{r}");
+    let mut c = Client::spawn(Path::new("/"), json!({"roots": {}}));
+    c.roots = vec![uri(&dir)];
+    let r = c.call(2, "list_recipes");
+    assert!(text(&r).contains("Dev.cook"), "{r}");
 }

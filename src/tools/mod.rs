@@ -31,7 +31,7 @@ impl crate::server::CookMcp {
     ) -> Result<std::sync::Arc<crate::workspace::Workspace>, CallToolResult> {
         let ws = self.workspace().await;
         if ws.is_unset() {
-            Err(text_err(crate::workspace::UNSET_HINT))
+            Err(text_err(ws.unset_hint()))
         } else {
             Ok(ws)
         }

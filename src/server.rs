@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::time::{Duration, Instant};
 
 use rmcp::{
     ServerHandler, handler::server::router::tool::ToolRouter, model::*, prompt_handler,
@@ -16,6 +16,18 @@ use crate::workspace::{RootSource, Workspace};
 /// How long to wait for the client's `roots/list` answer before falling back
 /// to the working directory.
 const ROOTS_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// After a `roots/list` timeout or error, don't ask again for this long
+/// (unless the client sends `roots/list_changed`).
+const ROOTS_RETRY_BACKOFF: Duration = Duration::from_secs(30);
+
+enum Asked {
+    Picked(Workspace),
+    /// The client answered but nothing in the answer is usable.
+    NoneUsable,
+    /// Timeout or error.
+    Failed,
+}
 
 #[derive(Clone)]
 pub struct CookMcp {
@@ -34,6 +46,8 @@ pub struct RootState {
     current: RwLock<Arc<Workspace>>,
     /// Ask the client for roots before the next local tool call.
     stale: AtomicBool,
+    /// Set after a failed `roots/list`: no new request before this instant.
+    retry_after: Mutex<Option<Instant>>,
     /// Captured during `initialize`, before any tool call can arrive.
     peer: OnceLock<rmcp::Peer<rmcp::RoleServer>>,
     refresh: tokio::sync::Mutex<()>,
@@ -46,6 +60,7 @@ impl RootState {
         Self {
             current: RwLock::new(fallback.clone()),
             stale: AtomicBool::new(fallback.source() != RootSource::Env),
+            retry_after: Mutex::new(None),
             fallback,
             peer: OnceLock::new(),
             refresh: tokio::sync::Mutex::new(()),
@@ -62,14 +77,29 @@ impl RootState {
 
     fn mark_stale(&self) {
         if self.fallback.source() != RootSource::Env {
+            *self.retry_after.lock().unwrap_or_else(|e| e.into_inner()) = None;
             self.stale.store(true, Ordering::SeqCst);
         }
+    }
+
+    fn in_backoff(&self, now: Instant) -> bool {
+        self.retry_after
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some_and(|t| now < t)
+    }
+
+    /// Keep using the fallback, but ask again after the backoff.
+    fn arm_retry(&self, now: Instant) {
+        *self.retry_after.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(now + ROOTS_RETRY_BACKOFF);
+        self.stale.store(true, Ordering::SeqCst);
     }
 
     /// The recipe root to use now, asking the client for its roots first when
     /// they may have changed.
     pub async fn get(&self) -> Arc<Workspace> {
-        if !self.stale.load(Ordering::SeqCst) {
+        if !self.stale.load(Ordering::SeqCst) || self.in_backoff(Instant::now()) {
             return self.current();
         }
         let Some(peer) = self.peer.get() else {
@@ -82,35 +112,59 @@ impl RootState {
         let advertises_roots = peer
             .peer_info()
             .is_some_and(|i| i.capabilities.roots.is_some());
-        let ws = if advertises_roots {
+        let asked = if advertises_roots {
             self.ask_client(peer).await
         } else {
-            None
-        }
-        .map(Arc::new)
-        .unwrap_or_else(|| self.fallback.clone());
+            Asked::NoneUsable
+        };
+        let (picked, note) = match asked {
+            Asked::Picked(ws) => (Some(ws), ""),
+            Asked::NoneUsable if !advertises_roots => {
+                (None, "the client doesn't support workspace roots")
+            }
+            Asked::NoneUsable => (None, "the client sent no usable workspace roots"),
+            Asked::Failed => {
+                self.arm_retry(Instant::now());
+                (
+                    None,
+                    "asking the client for workspace roots failed or timed out",
+                )
+            }
+        };
+        let ws = match picked {
+            Some(ws) => Arc::new(ws),
+            None if self.fallback.is_unset() => Arc::new(self.fallback.with_unset_note(note)),
+            None => self.fallback.clone(),
+        };
         tracing::info!("recipe root: {} ({:?})", ws.root(), ws.source());
         *self.current.write().unwrap_or_else(|e| e.into_inner()) = ws.clone();
         ws
     }
 
     #[allow(deprecated)] // roots: deprecated by SEP-2577, still what clients send
-    async fn ask_client(&self, peer: &rmcp::Peer<rmcp::RoleServer>) -> Option<Workspace> {
+    async fn ask_client(&self, peer: &rmcp::Peer<rmcp::RoleServer>) -> Asked {
         let roots = match tokio::time::timeout(ROOTS_TIMEOUT, peer.list_roots()).await {
             Ok(Ok(r)) => r.roots,
             Ok(Err(e)) => {
                 tracing::warn!("roots/list failed: {e}");
-                return None;
+                return Asked::Failed;
             }
             Err(_) => {
                 tracing::warn!("roots/list timed out");
-                return None;
+                return Asked::Failed;
             }
         };
-        let dir = crate::roots::pick_root(roots.iter().map(|r| r.uri.as_str()), &self.guards)?;
-        Workspace::with_source(&dir, RootSource::Roots)
-            .inspect_err(|e| tracing::warn!("client root {}: {e}", dir.display()))
-            .ok()
+        let Some(dir) = crate::roots::pick_root(roots.iter().map(|r| r.uri.as_str()), &self.guards)
+        else {
+            return Asked::NoneUsable;
+        };
+        match Workspace::with_source(&dir, RootSource::Roots) {
+            Ok(ws) => Asked::Picked(ws),
+            Err(e) => {
+                tracing::warn!("client root {}: {e}", dir.display());
+                Asked::NoneUsable
+            }
+        }
     }
 }
 
@@ -205,5 +259,26 @@ impl ServerHandler for CookMcp {
                 None,
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_roots_request_rearms_with_backoff() {
+        let mut ws = Workspace::new(".").unwrap();
+        ws.set_unset_for_test();
+        let st = RootState::new(ws, Guards::default());
+        let now = Instant::now();
+        assert!(!st.in_backoff(now));
+        st.stale.store(false, Ordering::SeqCst);
+        st.arm_retry(now);
+        assert!(st.stale.load(Ordering::SeqCst));
+        assert!(st.in_backoff(now + Duration::from_secs(29)));
+        assert!(!st.in_backoff(now + Duration::from_secs(31)));
+        st.mark_stale();
+        assert!(!st.in_backoff(now));
     }
 }

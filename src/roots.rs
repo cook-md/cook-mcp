@@ -4,7 +4,10 @@
 
 use std::path::{Path, PathBuf};
 
-/// Environment variables agent hosts set to a plugin's install folder.
+/// Environment variables agent hosts set to a plugin's install folder. The
+/// bare `PLUGIN_ROOT` is a generic name another tool could set for something
+/// else; a false positive only makes us ignore that one folder (and say so in
+/// the hint), which `COOK_RECIPES_DIR` always overrides.
 pub const PLUGIN_ROOT_VARS: [&str; 3] = ["CLAUDE_PLUGIN_ROOT", "CURSOR_PLUGIN_ROOT", "PLUGIN_ROOT"];
 
 /// How many ancestors above a folder to search for plugin manifests (a
@@ -45,29 +48,47 @@ impl Guards {
         }
     }
 
-    /// Whether `dir` must not be used as the recipe root.
-    pub fn rejects(&self, dir: &Path) -> bool {
+    /// Whether a folder the client sent as a root must not be used. The user
+    /// opened it on purpose, so only the hard cases are refused (no manifest
+    /// walk: a plugin author's own source tree is a fine recipe folder).
+    pub fn rejects_root(&self, dir: &Path) -> bool {
         let dir = canon(dir);
-        dir.parent().is_none()
-            || self.home.as_deref().is_some_and(|h| canon(h) == dir)
-            || self.is_plugin_dir(&dir)
+        self.hard_reason(&dir).is_some()
     }
 
-    fn is_plugin_dir(&self, dir: &Path) -> bool {
-        let slashed = dir.to_string_lossy().replace('\\', "/");
-        if ["/plugins/cache/", "/.gemini/extensions/"]
-            .iter()
-            .any(|m| slashed.contains(m))
-        {
-            return true;
-        }
-        if self.plugin_roots.iter().any(|r| dir.starts_with(canon(r))) {
-            return true;
+    /// Why the working directory can't be the recipe folder, for the hint.
+    pub fn unset_reason(&self, dir: &Path) -> Option<String> {
+        let dir = canon(dir);
+        if let Some(r) = self.hard_reason(&dir) {
+            return Some(r);
         }
         dir.ancestors()
             .take(PLUGIN_MARKER_DEPTH + 1)
             .any(has_plugin_manifest)
+            .then(|| plugin_reason(&dir))
     }
+
+    fn hard_reason(&self, dir: &Path) -> Option<String> {
+        if dir.parent().is_none() {
+            return Some("the working directory is the filesystem root".into());
+        }
+        if self.home.as_deref().is_some_and(|h| canon(h) == dir) {
+            return Some("the working directory is your home folder".into());
+        }
+        let slashed = dir.to_string_lossy().replace('\\', "/");
+        let in_known_cache = ["/plugins/cache/", "/.gemini/extensions/"]
+            .iter()
+            .any(|m| slashed.contains(m));
+        (in_known_cache || self.plugin_roots.iter().any(|r| dir.starts_with(canon(r))))
+            .then(|| plugin_reason(dir))
+    }
+}
+
+fn plugin_reason(dir: &Path) -> String {
+    format!(
+        "the server started in a plugin install folder ({})",
+        dir.display()
+    )
 }
 
 /// A Claude Code plugin, an Agent Plugins (agent-plugins.org) plugin, or a
@@ -128,11 +149,11 @@ fn percent_decode(s: &str) -> Option<String> {
 }
 
 /// The first root that is a local folder that exists and isn't refused by
-/// `guards`.
+/// [`Guards::rejects_root`].
 pub fn pick_root<'a>(uris: impl IntoIterator<Item = &'a str>, guards: &Guards) -> Option<PathBuf> {
     uris.into_iter()
         .filter_map(path_from_file_uri)
-        .find(|p| p.is_dir() && !guards.rejects(p))
+        .find(|p| p.is_dir() && !guards.rejects_root(p))
 }
 
 #[cfg(test)]
@@ -150,11 +171,11 @@ mod tests {
     fn rejects_filesystem_root_and_home() {
         let tmp = tempfile::tempdir().unwrap();
         let g = guards(tmp.path());
-        assert!(g.rejects(Path::new("/")));
-        assert!(g.rejects(tmp.path()));
+        assert!(g.unset_reason(Path::new("/")).is_some());
+        assert!(g.unset_reason(tmp.path()).is_some());
         let proj = tmp.path().join("proj");
         std::fs::create_dir(&proj).unwrap();
-        assert!(!g.rejects(&proj));
+        assert!(!g.unset_reason(&proj).is_some());
     }
 
     #[test]
@@ -176,17 +197,77 @@ mod tests {
             r#"{"$schema": "https://agent-plugins.org/schema/plugin.json"}"#,
         );
         let other = mk("other", "plugin.json", r#"{"name": "not a plugin"}"#);
-        assert!(g.rejects(&claude));
-        assert!(g.rejects(&gemini));
-        assert!(g.rejects(&agent));
-        assert!(!g.rejects(&other));
+        assert!(g.unset_reason(&claude).is_some());
+        assert!(g.unset_reason(&gemini).is_some());
+        assert!(g.unset_reason(&agent).is_some());
+        assert!(!g.unset_reason(&other).is_some());
         // A subfolder up to four levels down is still the plugin's.
         let deep = claude.join("a/b/c/d");
         std::fs::create_dir_all(&deep).unwrap();
-        assert!(g.rejects(&deep));
+        assert!(g.unset_reason(&deep).is_some());
         let deeper = deep.join("e");
         std::fs::create_dir_all(&deeper).unwrap();
-        assert!(!g.rejects(&deeper));
+        assert!(!g.unset_reason(&deeper).is_some());
+    }
+
+    #[test]
+    fn client_roots_skip_the_manifest_guard_but_keep_the_hard_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let g = guards(tmp.path());
+        // A folder the user opened that happens to be a plugin's source tree.
+        let plugin_src = tmp.path().join("my-plugin");
+        std::fs::create_dir_all(plugin_src.join(".claude-plugin")).unwrap();
+        std::fs::write(plugin_src.join(".claude-plugin/plugin.json"), "{}").unwrap();
+        assert!(!g.rejects_root(&plugin_src));
+        assert!(g.unset_reason(&plugin_src).is_some());
+        assert_eq!(
+            pick_root([uri(&plugin_src).as_str()], &g),
+            Some(plugin_src.clone())
+        );
+        assert!(
+            g.unset_reason(&plugin_src)
+                .unwrap()
+                .contains("plugin install folder")
+        );
+
+        assert!(g.rejects_root(Path::new("/")));
+        assert!(g.rejects_root(tmp.path()));
+        let cached = tmp.path().join(".codex/plugins/cache/x/y/1.0.0");
+        let ext = tmp.path().join(".gemini/extensions/cooklang");
+        std::fs::create_dir_all(&cached).unwrap();
+        std::fs::create_dir_all(&ext).unwrap();
+        assert!(g.rejects_root(&cached));
+        assert!(g.rejects_root(&ext));
+        let env_dir = tmp.path().join("envroot");
+        std::fs::create_dir_all(&env_dir).unwrap();
+        let g = Guards::from_vars(None, |k| {
+            (k == "CLAUDE_PLUGIN_ROOT").then(|| env_dir.clone().into_os_string())
+        });
+        assert!(g.rejects_root(&env_dir));
+    }
+
+    #[test]
+    fn unset_reasons_say_why() {
+        let tmp = tempfile::tempdir().unwrap();
+        let g = guards(tmp.path());
+        assert!(
+            g.unset_reason(Path::new("/"))
+                .unwrap()
+                .contains("filesystem root")
+        );
+        assert!(g.unset_reason(tmp.path()).unwrap().contains("home folder"));
+        let cached = tmp.path().join("plugins/cache/x");
+        std::fs::create_dir_all(&cached).unwrap();
+        assert!(
+            g.unset_reason(&cached)
+                .unwrap()
+                .contains("plugin install folder")
+        );
+        assert!(g.unset_reason(&tmp.path().join("proj")).is_none());
+    }
+
+    fn uri(p: &Path) -> String {
+        format!("file://{}", p.display())
     }
 
     #[test]
@@ -201,17 +282,18 @@ mod tests {
         for d in [&cached, &ext, &plain] {
             std::fs::create_dir_all(d).unwrap();
         }
-        assert!(g.rejects(&cached));
-        assert!(g.rejects(&ext));
-        assert!(!g.rejects(&plain));
+        assert!(g.unset_reason(&cached).is_some());
+        assert!(g.unset_reason(&ext).is_some());
+        assert!(!g.unset_reason(&plain).is_some());
 
         let g = Guards::from_vars(None, |k| {
             (k == "CURSOR_PLUGIN_ROOT").then(|| plain.clone().into_os_string())
         });
-        assert!(g.rejects(&plain));
+        assert!(g.unset_reason(&plain).is_some());
         std::fs::create_dir(plain.join("examples")).unwrap();
-        assert!(g.rejects(&plain.join("examples")));
-        assert!(!g.rejects(tmp.path()));
+        assert!(g.unset_reason(&plain.join("examples")).is_some());
+        assert!(g.rejects_root(&plain.join("examples")));
+        assert!(!g.unset_reason(tmp.path()).is_some());
     }
 
     #[test]

@@ -20,6 +20,8 @@ pub struct Workspace {
     /// an agent plugin's install folder: local tools refuse to run instead of
     /// scanning it.
     source: RootSource,
+    /// Why the working directory was refused ([`RootSource::Unset`] only).
+    unset_reason: Option<String>,
 }
 
 /// Where the recipe root came from, in priority order.
@@ -32,11 +34,12 @@ pub enum RootSource {
     Roots,
     /// The process working directory.
     Cwd,
-    /// None usable; see [`UNSET_HINT`].
+    /// None usable; see [`Workspace::unset_hint`].
     Unset,
 }
 
-pub const UNSET_HINT: &str = "No recipe folder set: the server was started outside a recipe folder (in /, the home folder or a plugin install folder) and the client shared no usable workspace root. Set COOK_RECIPES_DIR to your recipes folder in this MCP server's config (env), or start the client in that folder.";
+/// How to fix an unset recipe folder (the first sentence is matched by skills).
+const UNSET_FIX: &str = "Set COOK_RECIPES_DIR to your recipes folder in this MCP server's config (env), or start the client in that folder.";
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceError {
@@ -82,6 +85,7 @@ impl Workspace {
             root,
             given_root,
             source: RootSource::Cwd,
+            unset_reason: None,
         })
     }
 
@@ -108,7 +112,11 @@ impl Workspace {
     ) -> anyhow::Result<Self> {
         match &cfg.recipes_dir {
             Some(dir) => Self::with_source(dir, RootSource::Env),
-            None if guards.rejects(cwd) => Self::with_source(cwd, RootSource::Unset),
+            None if guards.unset_reason(cwd).is_some() => {
+                let mut ws = Self::with_source(cwd, RootSource::Unset)?;
+                ws.unset_reason = guards.unset_reason(cwd);
+                Ok(ws)
+            }
             None => Self::with_source(cwd, RootSource::Cwd),
         }
     }
@@ -118,9 +126,27 @@ impl Workspace {
         self.source = RootSource::Unset;
     }
 
-    /// No usable recipe folder was configured; see [`UNSET_HINT`].
+    /// No usable recipe folder was configured; see [`Workspace::unset_hint`].
     pub fn is_unset(&self) -> bool {
         self.source == RootSource::Unset
+    }
+
+    /// The tool error for an unset root: what's wrong and how to fix it.
+    pub fn unset_hint(&self) -> String {
+        match &self.unset_reason {
+            Some(why) => format!("No recipe folder set: {why}. {UNSET_FIX}"),
+            None => format!("No recipe folder set. {UNSET_FIX}"),
+        }
+    }
+
+    /// This unset root with another note appended to why it is unset.
+    pub fn with_unset_note(&self, note: &str) -> Self {
+        let mut ws = self.clone();
+        ws.unset_reason = Some(match &self.unset_reason {
+            Some(r) => format!("{r}, and {note}"),
+            None => note.to_string(),
+        });
+        ws
     }
 
     pub fn source(&self) -> RootSource {
