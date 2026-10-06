@@ -89,6 +89,52 @@ fn has_plugin_manifest(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// The local folder a `file://` root URI names, or `None` for other schemes,
+/// remote hosts, malformed escapes and (on Unix) Windows drive paths.
+pub fn path_from_file_uri(uri: &str) -> Option<PathBuf> {
+    let rest = uri
+        .get(..7)
+        .filter(|s| s.eq_ignore_ascii_case("file://"))
+        .map(|_| &uri[7..])?;
+    let rest = rest.split(['?', '#']).next().unwrap_or_default();
+    let slash = rest.find('/')?;
+    let (host, path) = rest.split_at(slash);
+    if !(host.is_empty() || host.eq_ignore_ascii_case("localhost")) {
+        return None;
+    }
+    let path = percent_decode(path)?;
+    let b = path.as_bytes();
+    let drive = b.len() >= 3 && b[1].is_ascii_alphabetic() && b[2] == b':';
+    if cfg!(windows) {
+        drive.then(|| PathBuf::from(&path[1..]))
+    } else {
+        (!drive).then(|| PathBuf::from(path))
+    }
+}
+
+fn percent_decode(s: &str) -> Option<String> {
+    let mut out = Vec::with_capacity(s.len());
+    let mut bytes = s.bytes();
+    while let Some(b) = bytes.next() {
+        if b == b'%' {
+            let hex = [bytes.next()?, bytes.next()?];
+            let hex = std::str::from_utf8(&hex).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+        } else {
+            out.push(b);
+        }
+    }
+    String::from_utf8(out).ok().filter(|s| !s.contains('\0'))
+}
+
+/// The first root that is a local folder that exists and isn't refused by
+/// `guards`.
+pub fn pick_root<'a>(uris: impl IntoIterator<Item = &'a str>, guards: &Guards) -> Option<PathBuf> {
+    uris.into_iter()
+        .filter_map(path_from_file_uri)
+        .find(|p| p.is_dir() && !guards.rejects(p))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +212,57 @@ mod tests {
         std::fs::create_dir(plain.join("examples")).unwrap();
         assert!(g.rejects(&plain.join("examples")));
         assert!(!g.rejects(tmp.path()));
+    }
+
+    #[test]
+    fn file_uris_parse_with_percent_encoding() {
+        let p = |u: &str| path_from_file_uri(u);
+        assert_eq!(
+            p("file:///Users/a/My%20Recipes"),
+            Some("/Users/a/My Recipes".into())
+        );
+        assert_eq!(p("FILE:///tmp/x"), Some("/tmp/x".into()));
+        assert_eq!(p("file://localhost/tmp/x"), Some("/tmp/x".into()));
+        assert_eq!(p("file:///tmp/caf%C3%A9?q=1#f"), Some("/tmp/café".into()));
+        assert_eq!(p("file://server/share/x"), None);
+        assert_eq!(p("https://example.com/x"), None);
+        assert_eq!(p("file:///tmp/bad%zz"), None);
+        assert_eq!(p("file:///tmp/trunc%2"), None);
+        assert_eq!(p("file:///tmp/nul%00"), None);
+        assert_eq!(p("file://"), None);
+        if cfg!(windows) {
+            assert_eq!(p("file:///C:/Users/a"), Some("C:/Users/a".into()));
+        } else {
+            assert_eq!(p("file:///C:/Users/a"), None);
+            assert_eq!(p("file:///c%3A/Users/a"), None);
+        }
+    }
+
+    #[test]
+    fn pick_root_takes_first_existing_allowed_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let a = tmp.path().join("a b");
+        let b = tmp.path().join("b");
+        for d in [&home, &a, &b] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let file = tmp.path().join("file.txt");
+        std::fs::write(&file, "").unwrap();
+        let g = guards(&home);
+        let uri = |p: &Path| format!("file://{}", p.display()).replace(' ', "%20");
+        let missing = uri(&tmp.path().join("missing"));
+        let (home_u, file_u, a_u, b_u) = (uri(&home), uri(&file), uri(&a), uri(&b));
+        let roots = [
+            "https://example.com",
+            missing.as_str(),
+            home_u.as_str(),
+            file_u.as_str(),
+            a_u.as_str(),
+            b_u.as_str(),
+        ];
+        assert_eq!(pick_root(roots, &g), Some(a.clone()));
+        assert_eq!(pick_root([missing.as_str(), home_u.as_str()], &g), None);
+        assert_eq!(pick_root([], &g), None);
     }
 }
