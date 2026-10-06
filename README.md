@@ -24,7 +24,7 @@ Any client that takes an `mcpServers` config:
 }
 ```
 
-If `COOK_RECIPES_DIR` is not set, the client's working directory is the recipe root.
+If `COOK_RECIPES_DIR` is not set, the server uses the workspace folder your client shares, or the folder the client was started in. See [How the recipe folder is chosen](#how-the-recipe-folder-is-chosen).
 
 Supported platforms: macOS (arm64, x64) and Linux (x64, arm64, glibc 2.35 or newer). There are no Windows builds yet.
 
@@ -129,11 +129,19 @@ Resources:
 
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `COOK_RECIPES_DIR` | the client's working directory | Recipe root. Every path is relative to it. |
+| `COOK_RECIPES_DIR` | the client's roots, then its working directory | Recipe root. Every path is relative to it. Always wins when set. |
 | `COOKMD_BASE_URL` | `https://cook.md` | Login, entitlements, import |
 | `NUTRITION_API_URL` | `https://nutrition.cook.md` | Nutrition service |
 | `NUTRITION_API_TOKEN` | none | Org key or pre-made token. Takes priority over the stored login. |
 | `COOK_MCP_AUTH_PATH` | `~/.config/cook-mcp/auth.json` | Token store. The old `NUTRITION_MCP_AUTH_PATH` still works as an alias. |
+
+## How the recipe folder is chosen
+
+1. `COOK_RECIPES_DIR`, if set. Nothing else is consulted.
+2. The client's MCP roots. If the client supports roots (it shares its open workspace folders with the server), the first `file://` root that is an existing folder becomes the recipe root. The server asks on the first recipe tool call and again whenever the client reports that its roots changed.
+3. The folder the client started the server in.
+
+`/`, your home folder and agent plugin install folders (for example `~/.codex/plugins/cache/...`, or any folder with `.claude-plugin/plugin.json`, an Agent Plugins `plugin.json` or `gemini-extension.json` within four levels above it) are never used as a recipe root: a client launched outside any project, or a plugin that starts the server in its own install folder, would otherwise expose the wrong files and write recipes into a folder that is wiped on update. When nothing usable is found, recipe tools tell the agent that no recipe folder is set, and `auth_status` shows `recipe_root_source: "unset"`. Otherwise `recipe_root_source` is `env`, `roots` or `cwd`.
 
 ## Things to ask
 
