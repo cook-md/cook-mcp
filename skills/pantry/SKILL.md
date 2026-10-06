@@ -25,7 +25,7 @@ TOML, organised by storage location. Each item is either a simple quantity strin
 
 ```
 [freezer]
-frozen_peas = { bought = "2024-11-05", quantity = "500%g", low = "200%g" }
+"frozen peas" = { bought = "2024-11-05", quantity = "500%g", low = "200%g" }
 
 [fridge]
 milk = { expire = "2024-11-15", quantity = "2%L" }
@@ -45,6 +45,9 @@ cumin = { bought = "2024-06-01" }
 2. To change stock, call `pantry_list` first to see the existing section and item names, then `pantry_update` using those names — reason: `milk` in `[fridge]` and `Milk` in `[dairy]` would become two items.
 3. After "I used / bought / finished X", update quantities or remove the item; after a shop, add the new items with `bought` (and `expire` for perishables).
 4. Tell the user what changed in the pantry.
+5. Before a shop, `pantry_depleted` (restock) and `pantry_expiring` (use first) are the two useful checks; offer them.
+
+Name items the way the recipes name the ingredient (`olive oil`, not `olive_oil` or `EVOO`); matching ignores case but nothing else, so a differently spelled item is never subtracted from a shopping list or counted by `pantry_recipes`. Names with spaces are quoted TOML keys (`"olive oil" = "500%ml"`); `pantry_update` writes them that way.
 
 ## Boundaries
 

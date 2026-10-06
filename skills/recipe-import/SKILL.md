@@ -28,6 +28,8 @@ Use when bringing a recipe in from a URL, photos, or pasted text.
 - See the `cooklang://syntax` resource and the metadata skill for field names if you adjust the converted output.
 - Touch only the file you are importing into. Ask before overwriting an existing recipe of the same name.
 - The import is a starting point: check that quantities and steps survived (especially from photos), and say if anything was unreadable.
+- If the source doesn't give servings or times, ask the user or leave the key out; don't invent them.
+- Writing it by hand (no `import_recipe`, or its `next_step` says so): put each quantity in the step that uses it — "1 cup flour" → `@flour{1%cup}`, "1/2 tsp vanilla" → `@vanilla{1/2%tsp}`, "3 large eggs" → `@eggs{3}(large)`, "salt to taste" → `@salt`; "bake for 30 minutes" → `~{30%minutes}`; "in a large bowl" → `#large bowl{}`.
 
 ## Do not skip the save
 

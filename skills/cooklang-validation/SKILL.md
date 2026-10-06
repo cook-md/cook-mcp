@@ -15,7 +15,7 @@ These rules are for .cook recipes. Menu files (.menu) share most syntax but are 
 
 1. Run `validate`: with `path` for one file or folder, with no arguments for the whole collection, or with `content` (plus `as_path`) for text that is not saved yet. It reports parse errors and warnings and recipe references that don't resolve; for a folder or the whole collection it also lists ingredients missing from `config/aisle.conf` — run `validate` with no arguments to see ingredients with no aisle. (It warns "Unnecessary scaling lock modifier" on fixed quantities `{=…}`: a known parser quirk; keep the `=` and ignore that warning.)
 2. Read the file with `read_recipe` (skip if the content is already in hand) and check it against every rule below too — some of them (a separate ingredient list, repeated quantities) parse fine and only show up as wrong data.
-3. For each violation, name the rule, quote the offending line, and give the corrected line.
+3. For each violation, name the rule, quote the offending line, and give the corrected line. Order the report by severity: errors (the file doesn't parse, a reference doesn't resolve), then rule violations below, then suggestions (missing `servings`, which scaling, plans and nutrition need).
 4. If the user wants it fixed, run `validate` on the corrected text (`content`), then save it with `write_recipe` (full file content).
 5. Tell the user what you fixed and saved.
 
@@ -38,11 +38,12 @@ These rules are for .cook recipes. Menu files (.menu) share most syntax but are 
 6. **Recipe references use `@./path` with no `.cook` extension.** Reason: the spec's reference form has no extension.
    - BAD: `@./sauces/pesto.cook{150%g}`
    - GOOD: `@./sauces/pesto{150%g}`
+7. **Steps are paragraphs.** A blank line ends a step — reason: consecutive lines with no blank line between them parse as one step, so a recipe written one sentence per line collapses into a single step.
 
 ## Do not skip the fix
 
 | Excuse | Rebuttal |
 |--------|----------|
 | "I only pointed out the errors, that's enough." | If the user wanted a fix, validate the corrected content and save it with `write_recipe`. Listing errors does not change the file. |
-| "`validate` passed, so the recipe is fine." | Rules 1, 2, 3, 5 and 6 pass `validate`; check them by eye. |
+| "`validate` passed, so the recipe is fine." | Rules 1, 2, 3, 5, 6 and 7 pass `validate`; check them by eye. |
 | "The recipe already has an ingredients list, keep it." | A separate ingredient list is the violation (rule 1). Remove it and put the quantities inline; do not preserve it. |

@@ -28,6 +28,12 @@ Gather what you need in as few rounds as possible and decide once; every extra r
 7. Write the plan in .menu format with YAML frontmatter (at least `servings` and `description`) and a `== Snacks ==` section. Run `validate` with the text as `content` and `as_path` set to the target path, then save with `write_menu`. It checks every recipe reference and refuses to save if one doesn't resolve — fix the path rather than forcing.
 8. Tell the user what you saved and where. If they asked for a check on the plan (a balanced-diet or nutrition report), render it now on the saved file — see the nutrition-reports skill.
 
+## Choosing well
+
+- Weeknights: quick, one-pot or few-step recipes; save longer cooks and batch prep for the weekend.
+- Reuse ingredients across days (half a bunch of coriander, an opened tin of coconut milk) and put perishables early in the week. With a pantry, `pantry_expiring` says what to use up first and `pantry_recipes` what is already covered.
+- Plan leftovers on purpose (cook 4 servings for 2 people, eat it twice) and vary cuisines and main proteins across the days.
+
 ## Menu line breaks
 
 Days and meals are written as blocks. A block is a labelled group (e.g. `Breakfast:` and its `- @item` lines, or the `== Snacks ==` list). End every line of a block with a trailing `\` EXCEPT the last line of the block; a blank line separates blocks. The `\` is a soft line break that keeps the block as one rendered step. Example:

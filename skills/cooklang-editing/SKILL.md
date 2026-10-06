@@ -20,6 +20,16 @@ This skill is for .cook recipes only. If the task is actually about a .menu meal
 5. Save with `write_recipe`, always sending the full file content (there is no partial edit). It validates again and refuses to save content with errors.
 6. Tell the user what you saved and where.
 
+## Writing a new recipe
+
+From a description, a family recipe from memory, or a dish the user names:
+
+- Ask for what you can't know (how many it serves, the user's quantities) instead of inventing it; a sensible default is fine for things like oven temperature if you say so.
+- Frontmatter with at least `title` and `servings`; add `time` (or `prep time` / `cook time`) and `tags` when known. Leave `source` out unless there is one.
+- One paragraph per step, separated by a blank line: lines with no blank line between them join into one step.
+- Mark everything inline where the step uses it: `@onion{1}(finely diced)` (preparation in parentheses), `#large pot{}`, `~{15%minutes}`. `= Sauce` starts a section in a multi-part recipe; a line starting with `>` is a note; `--` starts a comment.
+- Show the draft, adjust, then validate and save as in the workflow above.
+
 ## Rules
 
 - Metadata is YAML frontmatter, never the deprecated `>>` lines — for metadata-focused work, follow the metadata skill.
