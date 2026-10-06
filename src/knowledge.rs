@@ -362,14 +362,17 @@ mod tests {
         }
     }
 
-    /// As a Claude Code plugin skill, a skill can load without the server.
-    /// Each one says how to add it instead of guessing.
+    /// As a plugin skill, a skill can load without the server. Each one says,
+    /// client-neutrally, how to get it connected instead of guessing.
     #[test]
     fn skills_say_how_to_add_the_server() {
         for s in SKILLS {
             assert!(
-                s.body.contains("claude mcp add cook -- npx -y @cookmd/mcp")
-                    && s.body.contains("https://github.com/cook-md/cook-mcp"),
+                s.body.contains("the Cook MCP server isn't connected")
+                    && s.body.contains("(e.g. `/mcp`) or reinstall it")
+                    && s.body
+                        .contains("add it from https://github.com/cook-md/cook-mcp")
+                    && !s.body.contains("claude mcp add"),
                 "skill {} lacks the add-the-server line",
                 s.name
             );
